@@ -1,3 +1,4 @@
+from base64 import b64encode
 from datetime import datetime
 from pprint import pprint
 import os
@@ -17,6 +18,12 @@ BASE_URL = "https://www.civilservicejobs.service.gov.uk"
 # Folder to save the PDFs
 OUTPUT_FOLDER = "jobs"
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+# Repo to save the PDFs
+REPO_OWNER = "davidread"
+REPO_NAME = "jobadscrape"
+REPO_BRANCH = "main"
+
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0"
@@ -167,25 +174,69 @@ def scrape_job_details(job_url):
 
 
 def save_job_as_pdf(input_html, job_title, department, closing_date=None):
-    # Create filename with closing date if available
-    if closing_date:
-        filename_base = sanitize_filename(f"{job_title} - {department} - closes {closing_date}")
-    else:
-        filename_base = sanitize_filename(f"{job_title} - {department}")
+    # Create filename with closing date, or today if not available
+    date = closing_date or datetime.now().strftime('%Y-%m-%d')
+    filename_base = sanitize_filename(f"{date} {job_title} - {department}")
+    pdf_file_path = os.path.join(OUTPUT_FOLDER, f"{filename_base}.pdf")
+    github_token = os.environ.get("GITHUB_TOKEN")
 
-    pdf_file_name = os.path.join(OUTPUT_FOLDER, f"{filename_base}.pdf")
+    if github_token and check_if_file_exists_on_github(pdf_file_path, github_token):
+        print(f"File already exists on GitHub: {pdf_file_path}")
+        return
 
     try:
         html = HTML(string=input_html)
-        html.write_pdf(pdf_file_name)
-        print(f"Saved job PDF {pdf_file_name}")
+        html.write_pdf(pdf_file_path)
+        print(f"Saved job PDF {pdf_file_path}")
     except Exception as e:
-        print(f"Error saving PDF '{pdf_file_name}': {e}")
+        print(f"Error saving PDF '{pdf_file_path}': {e}")
+
+    if github_token:
+        success = upload_to_github(pdf_file_path, github_token)
+        if success:
+            print(f"Saved job PDF {pdf_file_path}")
+        else:
+            print(f"ERROR saving job PDF {pdf_file_path}")
+    else:
+        print(f"ERROR: No GitHub token to upload {pdf_file_path}")
 
 
 def sanitize_filename(filename):
     # Replace unsafe characters for filenames
     return "".join(c for c in filename if c.isalnum() or c in " ._-()").strip()
+
+
+def check_if_file_exists_on_github(file_path, github_token):
+    # GitHub API endpoint for getting file content
+    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{file_path}"
+    headers = {
+        "Authorization": f"token {github_token}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    
+    response = requests.get(url, headers=headers)
+    return response.status_code == 200
+
+def upload_to_github(file_path, github_token):
+    
+    # Read file content and encode in base64
+    with open(file_path, 'rb') as file:
+        content = b64encode(file.read()).decode()
+    
+    # GitHub API call
+    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{file_path}"
+    headers = {
+        "Authorization": f"token {github_token}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    data = {
+        "message": f"Add job listing {os.path.basename(file_path)}",
+        "content": content,
+        "REPO_BRANCH": REPO_BRANCH
+    }
+    
+    response = requests.put(url, headers=headers, json=data)
+    return response.status_code == 201
 
 
 if __name__ == "__main__":
