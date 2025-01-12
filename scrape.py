@@ -1,3 +1,4 @@
+from datetime import datetime
 from pprint import pprint
 import os
 import requests
@@ -64,7 +65,6 @@ def scrape_jobs(search_options_list):
             payload["nghr_dept"] = search_options.pop("department")
         assert not search_options, f"Unprocessed options {search_options}"
 
-        pprint(payload)
         response = requests.post(search_url, data=payload, headers=HEADERS)
         response.raise_for_status()
 
@@ -141,19 +141,42 @@ def scrape_job_details(job_url):
     job_title = soup.find('h1', {'id': 'id_common_page_title_h1'}).get_text(strip=True)
     department = soup.find('p', {'class': 'csr-page-subtitle'}).get_text(strip=True)
 
-    print(f"Processing job: {job_title} from department {department}")
+    # Extract closing date using the correct class
+    closing_date_elem = soup.find('p', {'class': 'vac_display_closing_date'})
+    if closing_date_elem:
+        date_text = closing_date_elem.get_text(strip=True)
+        try:
+            # Remove the "Apply before " prefix and time portion
+            date_text = date_text.split(' on ')[-1]  # Get the part after " on "
+            # Remove day of week if present (e.g., "Sunday")
+            if any(day in date_text for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']):
+                date_text = ' '.join(date_text.split(' ')[1:])
+            # Remove ordinal suffixes (th/st/nd/rd) but keep the month name
+            day = ''.join(c for c in date_text.split()[0] if c.isdigit())
+            month = date_text.split()[1]
+            year = date_text.split()[2]
+            date_text = f"{day} {month} {year}"
+            closing_date = datetime.strptime(date_text.strip(), '%d %B %Y').strftime('%Y-%m-%d')
+        except Exception as e:
+            print(f"Error parsing date '{date_text}': {e}")
+
+    print(f"Processing job: {job_title} from department: {department}, closing: {closing_date}")
 
     # Save job details as a PDF
-    save_job_as_pdf(response.text, job_title, department)
+    save_job_as_pdf(response.text, job_title, department, closing_date)
 
 
-def save_job_as_pdf(input_html, job_title, department):
-    filename_base = sanitize_filename(f"{job_title} - {department}")
+def save_job_as_pdf(input_html, job_title, department, closing_date=None):
+    # Create filename with closing date if available
+    if closing_date:
+        filename_base = sanitize_filename(f"{job_title} - {department} - closes {closing_date}")
+    else:
+        filename_base = sanitize_filename(f"{job_title} - {department}")
+
     pdf_file_name = os.path.join(OUTPUT_FOLDER, f"{filename_base}.pdf")
 
     try:
-        # Convert HTML to PDF using WeasyPrint
-        html = HTML(string=input_html)  # Use string if you're passing HTML content directly
+        html = HTML(string=input_html)
         html.write_pdf(pdf_file_name)
         print(f"Saved job PDF {pdf_file_name}")
     except Exception as e:
