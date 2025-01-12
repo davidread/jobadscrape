@@ -8,16 +8,23 @@ from weasyprint import HTML
 
 # Search options
 SEARCH_OPTIONS_LIST = [
-    {"department": "256999"}, # "Government Digital Service"
-    {"department": "258439"}, # "Central Digital and Data Office"
+    {
+        "department": "256999", # "Government Digital Service"
+        "output folder": "jobs/gds",
+    }, 
+    {
+        "department": "258439", # "Central Digital and Data Office"
+        "output folder": "jobs/cddo",
+    },
+    {
+        "department": "183940", # "Ministry of Justice"
+        "type of role": "249407", # digital
+        "output folder": "jobs/moj",
+    },
 ]
 
 # Base URL of the job search site
 BASE_URL = "https://www.civilservicejobs.service.gov.uk"
-
-# Folder to save the PDFs
-OUTPUT_FOLDER = "jobs"
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 # Repo to save the PDFs
 REPO_OWNER = "davidread"
@@ -70,6 +77,11 @@ def scrape_jobs(search_options_list):
             }
         if "department" in search_options:
             payload["nghr_dept"] = search_options.pop("department")
+        if "type of role" in search_options:
+            payload["nghr_job_category"] = search_options.pop("type of role")
+        if "output folder" in search_options:
+            output_folder = search_options.pop("output folder")
+            os.makedirs(output_folder, exist_ok=True)
         assert not search_options, f"Unprocessed options {search_options}"
 
         response = requests.post(search_url, data=payload, headers=HEADERS)
@@ -96,7 +108,7 @@ def scrape_jobs(search_options_list):
             job_links.append(job_link)
 
         for job_url in job_links:
-            scrape_job_details(job_url)
+            scrape_job_details(job_url, output_folder)
 
 
 def get_fresh_sid():
@@ -136,7 +148,7 @@ def extract_reqsig(soup):
     return reqsig
 
 
-def scrape_job_details(job_url):
+def scrape_job_details(job_url, output_folder):
     print(f"Fetching job details from: {job_url}")
 
     response = requests.get(job_url, headers=HEADERS)
@@ -170,14 +182,14 @@ def scrape_job_details(job_url):
     print(f"Processing job: {job_title} from department: {department}, closing: {closing_date}")
 
     # Save job details as a PDF
-    save_job_as_pdf(response.text, job_title, department, closing_date)
+    save_job_as_pdf(response.text, job_title, department, closing_date, output_folder)
 
 
-def save_job_as_pdf(input_html, job_title, department, closing_date=None):
+def save_job_as_pdf(input_html, job_title, department, closing_date, output_folder):
     # Create filename with closing date, or today if not available
     date = closing_date or datetime.now().strftime('%Y-%m-%d')
     filename_base = sanitize_filename(f"{date} {job_title} - {department}")
-    pdf_file_path = os.path.join(OUTPUT_FOLDER, f"{filename_base}.pdf")
+    pdf_file_path = os.path.join(output_folder, f"{filename_base}.pdf")
     github_token = os.environ.get("GITHUB_TOKEN")
 
     if github_token and check_if_file_exists_on_github(pdf_file_path, github_token):
@@ -194,9 +206,9 @@ def save_job_as_pdf(input_html, job_title, department, closing_date=None):
     if github_token:
         success = upload_to_github(pdf_file_path, github_token)
         if success:
-            print(f"Saved job PDF {pdf_file_path}")
+            print(f"Uploaded job PDF {pdf_file_path}")
         else:
-            print(f"ERROR saving job PDF {pdf_file_path}")
+            print(f"ERROR uploading job PDF {pdf_file_path}")
     else:
         print(f"ERROR: No GitHub token to upload {pdf_file_path}")
 
