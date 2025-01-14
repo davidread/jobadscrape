@@ -1,3 +1,4 @@
 .DS_Store
 venv
 jobs/
+job-scraper-service-account-key.json
