@@ -2,9 +2,11 @@ from base64 import b64encode
 from collections import defaultdict
 from datetime import datetime
 from enum import Enum, auto
+import json
 import os
 from pprint import pprint
 import re
+import sys
 
 from bs4 import BeautifulSoup
 from google.oauth2.credentials import Credentials
@@ -54,9 +56,12 @@ class ScrapeResult(Enum):
 class ScrapingStats:
     def __init__(self):
         self.stats = defaultdict(lambda: {result: 0 for result in ScrapeResult})
+        self.errored = False
         
     def add_job(self, department, result):
         self.stats[department][result] += 1
+        if result == ScrapeResult.ERROR:
+            self.errored = True
     
     def print_summary(self):
         print("\n=== Scraping Summary ===")
@@ -547,6 +552,9 @@ def upload_to_github(file_path, github_token):
 
 if __name__ == "__main__":
     try:
-        scrape_jobs(search_options_list=SEARCH_OPTIONS_LIST)
+        stats = scrape_jobs(search_options_list=SEARCH_OPTIONS_LIST)
     except Exception as e:
         print(f"An error occurred: {e}")
+        sys.exit(1)
+    if stats.errored:
+        sys.exit(1)
