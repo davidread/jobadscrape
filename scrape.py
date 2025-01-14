@@ -1,12 +1,15 @@
 from base64 import b64encode
+from collections import defaultdict
 from datetime import datetime
-from pprint import pprint
+from enum import Enum, auto
 import os
+from pprint import pprint
+
 import requests
 from bs4 import BeautifulSoup
 from weasyprint import HTML
 
-# Search options
+# Previous constants remain the same
 SEARCH_OPTIONS_LIST = [
     {
         "department": "256999", # "Government Digital Service"
@@ -23,26 +26,63 @@ SEARCH_OPTIONS_LIST = [
     },
 ]
 
-# Base URL of the job search site
 BASE_URL = "https://www.civilservicejobs.service.gov.uk"
-
-# Repo to save the PDFs
 REPO_OWNER = "davidread"
 REPO_NAME = "jobadscrape"
 REPO_BRANCH = "main"
-
-
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0"
 }
 
+class ScrapeResult(Enum):
+    NEW = auto()
+    EXISTING = auto()
+    ERROR = auto()
+
+class ScrapingStats:
+    def __init__(self):
+        self.stats = defaultdict(lambda: {result: 0 for result in ScrapeResult})
+        
+    def add_job(self, department, result):
+        self.stats[department][result] += 1
+    
+    def print_summary(self):
+        print("\n=== Scraping Summary ===")
+        total_by_result = defaultdict(int)
+        
+        for dept, counts in self.stats.items():
+            total = sum(counts.values())
+            
+            print(f"\n{dept}:")
+            print(f"  Total jobs found: {total}")
+            print(f"  New jobs uploaded: {counts[ScrapeResult.NEW]} ({(counts[ScrapeResult.NEW]/total * 100):.1f}%)")
+            print(f"  Existing jobs: {counts[ScrapeResult.EXISTING]}")
+            if counts[ScrapeResult.ERROR]:
+                print(f"  ERRORS: {counts[ScrapeResult.ERROR]} ({(counts[ScrapeResult.ERROR]/total * 100):.1f}%)")
+            
+            for result, count in counts.items():
+                total_by_result[result] += count
+        
+        total_jobs = sum(total_by_result.values())
+        print("\nOverall Summary:")
+        print(f"  Total jobs across all departments: {total_jobs}")
+        print(f"  Total new jobs uploaded: {total_by_result[ScrapeResult.NEW]} ({(total_by_result[ScrapeResult.NEW]/total_jobs * 100):.1f}%)")
+        print(f"  Total existing jobs: {total_by_result[ScrapeResult.EXISTING]}")
+        errors = total_by_result[ScrapeResult.ERROR]
+        if errors:
+            print(f"  ERRORS: {errors} ({(errors/total_jobs * 100):.1f}%)")
+        print("=====================")
+
 def scrape_jobs(search_options_list):
     print("Starting job scraping...")
+    stats = ScrapingStats()
 
-    # Setup
+    # Fetch a list of files from GitHub once
+    github_token = os.environ.get("GITHUB_TOKEN")
+    file_list = fetch_all_files_from_github(github_token) if github_token else []
+    
     sid = get_fresh_sid()
     print(f"Fresh SID: {sid}")
-
     reqsig = get_reqsig(sid)
 
     for search_options in search_options_list:
@@ -108,8 +148,16 @@ def scrape_jobs(search_options_list):
             job_links.append(job_link)
 
         for job_url in job_links:
-            scrape_job_details(job_url, output_folder)
+            try:
+                result = scrape_job_details(job_url, output_folder, file_list)
+                stats.add_job(department, result)
+            except Exception as e:
+                print(f"Error processing job {job_url}: {e}")
+                stats.add_job(department, ScrapeResult.ERROR)
 
+    # Print summary at the end
+    stats.print_summary()
+    return stats
 
 def get_fresh_sid():
     """Fetch a fresh SID from the website."""
@@ -148,8 +196,8 @@ def extract_reqsig(soup):
     return reqsig
 
 
-def scrape_job_details(job_url, output_folder):
-    print(f"Fetching job details from: {job_url}")
+def scrape_job_details(job_url, output_folder, file_list):
+    print(f"\nFetching job details from: {job_url}")
 
     response = requests.get(job_url, headers=HEADERS)
     response.raise_for_status()
@@ -181,20 +229,22 @@ def scrape_job_details(job_url, output_folder):
 
     print(f"Processing job: {job_title} from department: {department}, closing: {closing_date}")
 
-    # Save job details as a PDF
-    save_job_as_pdf(response.text, job_title, department, closing_date, output_folder)
+    try:
+        return save_job_as_pdf(response.text, job_title, department, closing_date, output_folder, file_list)
+    except Exception as e:
+        print(f"Error saving job: {e}")
+        return ScrapeResult.ERROR
 
-
-def save_job_as_pdf(input_html, job_title, department, closing_date, output_folder):
+def save_job_as_pdf(input_html, job_title, department, closing_date, output_folder, file_list):
     # Create filename with closing date, or today if not available
     date = closing_date or datetime.now().strftime('%Y-%m-%d')
     filename_base = sanitize_filename(f"{date} {job_title} - {department}")
     pdf_file_path = os.path.join(output_folder, f"{filename_base}.pdf")
     github_token = os.environ.get("GITHUB_TOKEN")
 
-    if github_token and check_if_file_exists_on_github(pdf_file_path, github_token):
+    if check_if_file_exists(pdf_file_path, file_list):
         print(f"File already exists on GitHub: {pdf_file_path}")
-        return
+        return ScrapeResult.EXISTING
 
     try:
         html = HTML(string=input_html)
@@ -202,15 +252,19 @@ def save_job_as_pdf(input_html, job_title, department, closing_date, output_fold
         print(f"Saved job PDF {pdf_file_path}")
     except Exception as e:
         print(f"Error saving PDF '{pdf_file_path}': {e}")
+        raise
 
     if github_token:
         success = upload_to_github(pdf_file_path, github_token)
         if success:
             print(f"Uploaded job PDF {pdf_file_path}")
+            return ScrapeResult.NEW
         else:
             print(f"ERROR uploading job PDF {pdf_file_path}")
+            raise Exception("Failed to upload to GitHub")
     else:
         print(f"ERROR: No GitHub token to upload {pdf_file_path}")
+        raise Exception("No GitHub token available")
 
 
 def sanitize_filename(filename):
@@ -218,16 +272,24 @@ def sanitize_filename(filename):
     return "".join(c for c in filename if c.isalnum() or c in " ._-()").strip()
 
 
-def check_if_file_exists_on_github(file_path, github_token):
-    # GitHub API endpoint for getting file content
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{file_path}"
+def fetch_all_files_from_github(github_token):
+    """Fetch a list of all files in the GitHub repository."""
+    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/git/trees/{REPO_BRANCH}?recursive=1"
     headers = {
         "Authorization": f"token {github_token}",
         "Accept": "application/vnd.github.v3+json"
     }
-    
+
     response = requests.get(url, headers=headers)
-    return response.status_code == 200
+    response.raise_for_status()
+
+    tree = response.json().get("tree", [])
+    file_paths = [item["path"] for item in tree if item["type"] == "blob"]
+    return file_paths
+
+def check_if_file_exists(file_path, file_list):
+    """Check if the file exists in the GitHub file list."""
+    return file_path in file_list
 
 def upload_to_github(file_path, github_token):
     
