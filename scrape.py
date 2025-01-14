@@ -410,7 +410,7 @@ def initialize_sheets_service():
             if not service_account_info:
                 raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY environment variable not found")
             service_account_dict = json.loads(service_account_info)
-            creds = ServiceAccountCredentials.from_dict(
+            creds = ServiceAccountCredentials.from_service_account_info(
                 service_account_dict,
                 scopes=SCOPES
             )
