@@ -7,6 +7,7 @@ import os
 from pprint import pprint
 import re
 import sys
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from google.oauth2.credentials import Credentials
@@ -30,6 +31,10 @@ SEARCH_OPTIONS_LIST = [
         "department": "183940", # "Ministry of Justice"
         "type of role": "249407", # digital
         "output folder": "jobs/moj",
+    },
+    {
+        "what": "developer",
+        "output folder": "jobs/developer",
     },
 ]
 BASE_URL = "https://www.civilservicejobs.service.gov.uk"
@@ -91,7 +96,7 @@ class ScrapingStats:
         print("=====================")
 
 def scrape_jobs(search_options_list):
-    print("Starting job scraping...")
+    print("Starting job scraping...\n")
     stats = ScrapingStats()
 
     # Fetch a list of PDFs already in GitHub
@@ -111,7 +116,7 @@ def scrape_jobs(search_options_list):
     reqsig = get_reqsig(sid)
 
     for search_options in search_options_list:
-        output_folder = search_options.get("output folder")
+        output_folder = search_options.pop("output folder")
         os.makedirs(output_folder, exist_ok=True)
         
         # Perform search
@@ -141,46 +146,69 @@ def scrape_jobs(search_options_list):
             # "id_chosen_placeholder_text_multiple": "resultpage",
             # "whatoption": "words",
             }
-        department = search_options.get("department")
-        if department:
-            payload["nghr_dept"] = department
+        if "department" in search_options:
+            payload["nghr_dept"] = search_options.pop("department")
         if "type of role" in search_options:
-            payload["nghr_job_category"] = search_options["type of role"]
-            
-        response = requests.post(search_url, data=payload, headers=HEADERS)
-        response.raise_for_status()
-        
-        # Parse search results
-        soup = BeautifulSoup(response.text, "html.parser")
-        job_result = soup.find_all("li", class_="search-results-job-box")
-        print(f"\nSearch: {search_options}")
-        print(f"Found {len(job_result)} job listings")
+            payload["nghr_job_category"] = search_options.pop("type of role")
+        if "what" in search_options:
+            payload["what"] = search_options.pop("what")
+        assert not search_options, f"Unprocessed options {search_options}"
+        filtered_payload = {k: v for k, v in payload.items() if k not in ['reqsig', 'SID']}
+        print(f"\nSearch: {filtered_payload}")
 
-        for job_result in job_result:
-            try:
-                # Extract info from search result
-                job_data = scrape_job_search_result(job_result, existing_jobs)
-                
-                # Check if job already exists in the sheet
-                job_key = (job_data['title'], job_data['department'], job_data['closing_date'])
-                if job_key in existing_jobs:
-                    print(f"Job already exists in sheet: {job_data['title']}")
-                    stats.add_job(job_data['department'], ScrapeResult.EXISTING)
-                    continue
-                
-                # Add to sheet
-                if sheets_service and append_to_sheets(sheets_service, job_data, headers):
-                    # If successfully added to sheet, fetch full page and save PDF
-                    if scrape_job_page(job_data, output_folder, file_list, sheets_service):
-                        stats.add_job(job_data['department'], ScrapeResult.SHEET_UPDATED)
+       # Page through results
+        current_url = search_url
+        page_number = 1
+        
+        while True:            
+            if page_number == 1:
+                # First page uses POST with payload
+                response = requests.post(current_url, data=payload, headers=HEADERS)
+            else:
+                # Subsequent pages use GET with the full URL
+                print(f"\nProcessing page {page_number}")
+                response = requests.get(current_url, headers=HEADERS)
+            response.raise_for_status()
+            
+            # Parse search results
+            soup = BeautifulSoup(response.text, "html.parser")
+            job_results = soup.find_all("li", class_="search-results-job-box")
+            print(f"Found {len(job_results)} job listings on page {page_number}")
+
+            for job_result in job_results:
+                try:
+                    # Extract info from search result
+                    job_data = scrape_job_search_result(job_result, existing_jobs)
+                    
+                    # Check if job already exists in the sheet
+                    job_key = (job_data['title'], job_data['department'], job_data['closing_date'])
+                    if job_key in existing_jobs:
+                        print(f"Job already exists in sheet: {job_data['title']}")
+                        stats.add_job(job_data['department'], ScrapeResult.EXISTING)
+                        continue
+                    
+                    # Add to sheet
+                    if sheets_service and append_to_sheets(sheets_service, job_data, headers):
+                        # If successfully added to sheet, fetch full page and save PDF
+                        if scrape_job_page(job_data, output_folder, file_list, sheets_service):
+                            stats.add_job(job_data['department'], ScrapeResult.NEW)
+                        else:
+                            stats.add_job(job_data['department'], ScrapeResult.ERROR)
                     else:
                         stats.add_job(job_data['department'], ScrapeResult.ERROR)
-                else:
-                    stats.add_job(job_data['department'], ScrapeResult.ERROR)
-                    
-            except Exception as e:
-                print(f"Error processing job box: {e}")
-                stats.add_job(department, ScrapeResult.ERROR)
+                        
+                except Exception as e:
+                    print(f"Error processing job box: {e}")
+                    stats.add_job(repr(job_result), ScrapeResult.ERROR)
+
+            # Check for next page
+            next_url = get_next_page_url(soup, BASE_URL)
+            if not next_url:
+                print(f"No more pages to process")
+                break
+                
+            current_url = next_url
+            page_number += 1
 
     # Print summary at the end
     stats.print_summary()
@@ -206,7 +234,6 @@ def get_fresh_sid():
         # print("SID from form URL")
         return form_action.split("SID=")[1].split("&")[0]
     
-
 def get_reqsig(sid):
     url = f"{BASE_URL}/csr/esearch.cgi?SID="
     params = {"SID": sid}
@@ -221,6 +248,24 @@ def extract_reqsig(soup):
     assert reqsig_input
     reqsig = reqsig_input["value"]
     return reqsig
+
+def get_next_page_url(soup, base_url):
+    """Extract the next page URL from the pagination section"""
+    pagination = soup.find_all("div", class_="search-results-paging-menu")
+    if not pagination:
+        return None
+        
+    # Look for the "next »" link
+    next_link = pagination[-1].find('a', string=lambda t: t and '»' in t)
+    if next_link:
+        return ensure_absolute_url(next_link['href'], base_url)
+    return None
+
+def ensure_absolute_url(href, base_url):
+    if not bool(urlparse(href).scheme):
+        # href is a relative link
+        return urljoin(base_url, href)
+    return href
 
 def scrape_job_search_result(job_box, existing_jobs):
     """Extract job information from a search result box."""
@@ -311,7 +356,6 @@ def get_existing_jobs(service):
             
         # Get headers from first row
         headers = rows[0]
-        print(f"Found headers: {headers}")
         
         # Create column index mapping
         col_map = {header.lower(): idx for idx, header in enumerate(headers)}
@@ -319,6 +363,7 @@ def get_existing_jobs(service):
                           'location', 'reference', 'url', 'pdf path', 'scrape date'}
         missing_headers = required_headers - set(h.lower() for h in headers)
         if missing_headers:
+            print(f"Found headers: {headers}")
             raise ValueError(f"Sheet is missing required headers: {missing_headers}")
         
         # Create a set of tuples (job title, department, closing_date) for easy matching
