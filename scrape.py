@@ -7,6 +7,7 @@ import os
 from pprint import pprint
 import re
 import sys
+import time
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
@@ -63,8 +64,8 @@ class ScrapingStats:
         self.stats = defaultdict(lambda: {result: 0 for result in ScrapeResult})
         self.errored = False
         
-    def add_job(self, department, result):
-        self.stats[department][result] += 1
+    def add_job(self, id_, result):
+        self.stats[id_][result] += 1
         if result == ScrapeResult.ERROR:
             self.errored = True
     
@@ -72,10 +73,10 @@ class ScrapingStats:
         print("\n=== Scraping Summary ===")
         total_by_result = defaultdict(int)
         
-        for dept, counts in self.stats.items():
+        for id_, counts in self.stats.items():
             total = sum(counts.values())
             
-            print(f"\n{dept}:")
+            print(f"\n{id_}:")
             print(f"  Total jobs found: {total}")
             print(f"  New jobs uploaded: {counts[ScrapeResult.NEW]} ({(counts[ScrapeResult.NEW]/total * 100):.1f}%)")
             print(f"  Existing jobs: {counts[ScrapeResult.EXISTING]}")
@@ -156,18 +157,18 @@ def scrape_jobs(search_options_list):
         filtered_payload = {k: v for k, v in payload.items() if k not in ['reqsig', 'SID']}
         print(f"\nSearch: {filtered_payload}")
 
-       # Page through results
+        # Page through results
         current_url = search_url
         page_number = 1
-        
+
         while True:            
             if page_number == 1:
                 # First page uses POST with payload
-                response = requests.post(current_url, data=payload, headers=HEADERS)
+                response = requests_session.post(current_url, data=payload, headers=HEADERS)
             else:
                 # Subsequent pages use GET with the full URL
                 print(f"\nProcessing page {page_number}")
-                response = requests.get(current_url, headers=HEADERS)
+                response = requests_session.get(current_url, headers=HEADERS)
             response.raise_for_status()
             
             # Parse search results
@@ -184,22 +185,22 @@ def scrape_jobs(search_options_list):
                     job_key = (job_data['title'], job_data['department'], job_data['closing_date'])
                     if job_key in existing_jobs:
                         print(f"Job already exists in sheet: {job_data['title']}")
-                        stats.add_job(job_data['department'], ScrapeResult.EXISTING)
+                        stats.add_job(output_folder, ScrapeResult.EXISTING)
                         continue
                     
                     # Add to sheet
                     if sheets_service and append_to_sheets(sheets_service, job_data, headers):
                         # If successfully added to sheet, fetch full page and save PDF
                         if scrape_job_page(job_data, output_folder, file_list, sheets_service):
-                            stats.add_job(job_data['department'], ScrapeResult.NEW)
+                            stats.add_job(output_folder, ScrapeResult.NEW)
                         else:
-                            stats.add_job(job_data['department'], ScrapeResult.ERROR)
+                            stats.add_job(output_folder, ScrapeResult.ERROR)
                     else:
-                        stats.add_job(job_data['department'], ScrapeResult.ERROR)
+                        stats.add_job(output_folder, ScrapeResult.ERROR)
                         
                 except Exception as e:
                     print(f"Error processing job box: {e}")
-                    stats.add_job(repr(job_result), ScrapeResult.ERROR)
+                    stats.add_job(output_folder, ScrapeResult.ERROR)
 
             # Check for next page
             next_url = get_next_page_url(soup, BASE_URL)
@@ -217,7 +218,7 @@ def scrape_jobs(search_options_list):
 def get_fresh_sid():
     """Fetch a fresh SID from the website."""
     initial_url = f"{BASE_URL}/csr/index.cgi"
-    response = requests.get(initial_url, headers=HEADERS)
+    response = requests_session.get(initial_url, headers=HEADERS)
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html.parser")
@@ -237,7 +238,7 @@ def get_fresh_sid():
 def get_reqsig(sid):
     url = f"{BASE_URL}/csr/esearch.cgi?SID="
     params = {"SID": sid}
-    response = requests.get(url, params=params, headers=HEADERS)
+    response = requests_session.get(url, params=params, headers=HEADERS)
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html.parser")
@@ -417,7 +418,7 @@ def extract_salary_range(soup):
 def scrape_job_page(job_data, output_folder, file_list, sheets_service):
     print(f"\nFetching job page: {job_data['url']}")
     
-    response = requests.get(job_data['url'], headers=HEADERS)
+    response = requests_session.get(job_data['url'], headers=HEADERS)
     response.raise_for_status()
     
     soup = BeautifulSoup(response.text, "html.parser")
@@ -562,7 +563,7 @@ def fetch_all_files_from_github(github_token):
         "Accept": "application/vnd.github.v3+json"
     }
 
-    response = requests.get(url, headers=headers)
+    response = requests_session.get(url, headers=headers)
     response.raise_for_status()
 
     tree = response.json().get("tree", [])
@@ -591,9 +592,27 @@ def upload_to_github(file_path, github_token):
         "REPO_BRANCH": REPO_BRANCH
     }
     
-    response = requests.put(url, headers=headers, json=data)
+    response = requests_session.put(url, headers=headers, json=data)
     return response.status_code == 201
 
+class RateLimitedRequestsSession(requests.Session):
+    def __init__(self, rate_limit_enabled=True, delay=1.0):
+        super().__init__()
+        self.last_request_time = 0
+        self.rate_limit_enabled = rate_limit_enabled
+        self.delay = delay
+
+    def request(self, *args, **kwargs):
+        if self.rate_limit_enabled:
+            elapsed = time.time() - self.last_request_time
+            if elapsed < self.delay:
+                time.sleep(self.delay - elapsed)
+        
+        response = super().request(*args, **kwargs)
+        self.last_request_time = time.time()
+        return response
+
+requests_session = RateLimitedRequestsSession(rate_limit_enabled=not os.environ.get("DISABLE_RATELIMITING"))
 
 if __name__ == "__main__":
     try:
