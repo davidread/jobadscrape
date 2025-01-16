@@ -35,7 +35,17 @@ SEARCH_OPTIONS_LIST = [
     },
     {
         "what": "developer",
+        "what_exact_match": "developer",  # to avoid matching on "development"
         "output folder": "jobs/developer",
+    },
+    {
+        "what": "software engineer",
+        "output folder": "jobs/developer",
+    },
+    {
+        "what": "technical architect",
+        "what_exact_match": "architect",  # to avoid matching on body text
+        "output folder": "jobs/technical-architect",
     },
 ]
 BASE_URL = "https://www.civilservicejobs.service.gov.uk"
@@ -153,6 +163,10 @@ def scrape_jobs(search_options_list):
             payload["nghr_job_category"] = search_options.pop("type of role")
         if "what" in search_options:
             payload["what"] = search_options.pop("what")
+        if "what_exact_match" in search_options:
+            what_exact_match = search_options.pop("what_exact_match")
+        else:
+            what_exact_match = None
         assert not search_options, f"Unprocessed options {search_options}"
         filtered_payload = {k: v for k, v in payload.items() if k not in ['reqsig', 'SID']}
         print(f"\nSearch: {filtered_payload}")
@@ -181,6 +195,14 @@ def scrape_jobs(search_options_list):
                     # Extract info from search result
                     job_data = scrape_job_search_result(job_result, existing_jobs)
                     
+                    if what_exact_match and what_exact_match.lower() not in job_data['title'].lower():
+                        # Require an exact match in the job title.
+                        # The reason is that CSJ's search is very broad:
+                        # e.g. "Intelligence Development Officer" job matches "Developer", probably due to stemming
+                        # e.g. "User Researcher" job matches "Technical Architect", when the latter is mentioned as a colleague in the job description
+                        print(f'Ignoring job "{job_data["title"]}" as it is not an exact match of "{what_exact_match}"')
+                        continue
+
                     # Check if job already exists in the sheet
                     job_key = (job_data['title'], job_data['department'], job_data['closing_date'])
                     if job_key in existing_jobs:
@@ -286,6 +308,7 @@ def scrape_job_search_result(job_box, existing_jobs):
     
     # Extract reference
     ref_elem = job_box.find("div", class_="search-results-job-box-refcode")
+    reference = extract_reference(ref_elem) if ref_elem else None
     reference = None
     if ref_elem:
         ref_text = ref_elem.get_text(strip=True)
@@ -401,8 +424,8 @@ def extract_salary_range(soup):
         r'£([\d,]+)(?:\s*-\s*£?([\d,]+))',  # £30,000 - £40,000
         r'£([\d,]+)(?:\s*to\s*£?([\d,]+))', # £30,000 to £40,000
         r'Up to £([\d,]+)',  # Up to £40,000
-        r'From £([\d,]+)'    # From £30,000
-        r'£([\d,]+)'         # £20,000
+        r'From £([\d,]+)',   # From £30,000
+        r'£([\d,]+)',        # £20,000
     ]
     
     for pattern in patterns:
@@ -414,6 +437,11 @@ def extract_salary_range(soup):
             return min_salary, max_salary
             
     return salary_text, None
+
+def extract_reference(ref_elem):
+    ref_text = ref_elem.get_text(strip=True)
+    match = re.search(r'(?:Reference|Ref|Reference number)\s?:\s*([^\s]+)', ref_text, re.IGNORECASE)
+    return match.group(1) if match else ref_text
 
 def scrape_job_page(job_data, output_folder, file_list, sheets_service):
     print(f"\nFetching job page: {job_data['url']}")
