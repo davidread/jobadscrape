@@ -1,3 +1,4 @@
+import argparse
 from base64 import b64encode
 from collections import defaultdict
 from datetime import datetime
@@ -22,30 +23,30 @@ from weasyprint import HTML
 SEARCH_OPTIONS_LIST = [
     {
         "department": "256999", # "Government Digital Service"
-        "output folder": "jobs/gds",
+        "output folder": "gds",
     }, 
     {
         "department": "258439", # "Central Digital and Data Office"
-        "output folder": "jobs/cddo",
+        "output folder": "cddo",
     },
     {
         "department": "183940", # "Ministry of Justice"
         "type of role": "249407", # digital
-        "output folder": "jobs/moj",
+        "output folder": "moj",
     },
     {
         "what": "developer",
         "what_exact_match": "developer",  # to avoid matching on "development"
-        "output folder": "jobs/developer",
+        "output folder": "developer",
     },
     {
         "what": "software engineer",
-        "output folder": "jobs/developer",
+        "output folder": "developer",
     },
     {
         "what": "technical architect",
         "what_exact_match": "architect",  # to avoid matching on body text
-        "output folder": "jobs/technical-architect",
+        "output folder": "technical-architect",
     },
 ]
 BASE_URL = "https://www.civilservicejobs.service.gov.uk"
@@ -98,15 +99,15 @@ class ScrapingStats:
         
         total_jobs = sum(total_by_result.values())
         print("\nOverall Summary:")
-        print(f"  Total jobs across all departments: {total_jobs}")
-        print(f"  Total new jobs uploaded: {total_by_result[ScrapeResult.NEW]} ({(total_by_result[ScrapeResult.NEW]/total_jobs * 100):.1f}%)")
-        print(f"  Total existing jobs: {total_by_result[ScrapeResult.EXISTING]}")
+        print(f"  Total jobs found: {total_jobs}")
+        print(f"  New jobs uploaded: {total_by_result[ScrapeResult.NEW]} ({(total_by_result[ScrapeResult.NEW]/total_jobs * 100):.1f}%)")
+        print(f"  Existing jobs: {total_by_result[ScrapeResult.EXISTING]}")
         errors = total_by_result[ScrapeResult.ERROR]
         if errors:
             print(f"  ERRORS: {errors} ({(errors/total_jobs * 100):.1f}%)")
         print("=====================")
 
-def scrape_jobs(search_options_list):
+def scrape_jobs(search_options_list, dry_run):
     print("Starting job scraping...\n")
     stats = ScrapingStats()
 
@@ -115,19 +116,17 @@ def scrape_jobs(search_options_list):
     file_list = fetch_all_files_from_github(github_token) if github_token else []
 
     # Initialize Google Sheets service
-    sheets_service = initialize_sheets_service()
-    if not sheets_service:
+    jobs_google_sheet = JobsGoogleSheet()
+    if not jobs_google_sheet:
         print("Warning: Google Sheets service not initialized. Will continue without saving to sheets.")
-        existing_jobs = {}
     else:
-        headers, existing_jobs = get_existing_jobs(sheets_service)
-        print(f"Found {len(existing_jobs)} existing jobs in sheet")
+        print(f"Found {jobs_google_sheet.num_jobs} existing jobs in sheet")
    
     sid = get_fresh_sid()
     reqsig = get_reqsig(sid)
 
     for search_options in search_options_list:
-        output_folder = search_options.pop("output folder")
+        output_folder = f'jobs/{search_options.pop("output folder")}'
         os.makedirs(output_folder, exist_ok=True)
         
         # Perform search
@@ -193,7 +192,7 @@ def scrape_jobs(search_options_list):
             for job_result in job_results:
                 try:
                     # Extract info from search result
-                    job_data = scrape_job_search_result(job_result, existing_jobs)
+                    job_data = scrape_job_search_result(job_result)
                     
                     if what_exact_match and what_exact_match.lower() not in job_data['title'].lower():
                         # Require an exact match in the job title.
@@ -204,16 +203,16 @@ def scrape_jobs(search_options_list):
                         continue
 
                     # Check if job already exists in the sheet
-                    job_key = (job_data['title'], job_data['department'], job_data['closing_date'])
-                    if job_key in existing_jobs:
-                        print(f"Job already exists in sheet: {job_data['title']}")
+                    row_in_sheet = jobs_google_sheet.get_job_row(job_data)
+                    if row_in_sheet is not None:
+                        print(f"Job already exists in sheet - row {row_in_sheet}")
                         stats.add_job(output_folder, ScrapeResult.EXISTING)
                         continue
                     
                     # Add to sheet
-                    if sheets_service and append_to_sheets(sheets_service, job_data, headers):
+                    if jobs_google_sheet and jobs_google_sheet.append_to_sheets(job_data, dry_run):
                         # If successfully added to sheet, fetch full page and save PDF
-                        if scrape_job_page(job_data, output_folder, file_list, sheets_service):
+                        if scrape_job_page(job_data, output_folder, file_list, jobs_google_sheet, dry_run):
                             stats.add_job(output_folder, ScrapeResult.NEW)
                         else:
                             stats.add_job(output_folder, ScrapeResult.ERROR)
@@ -290,7 +289,7 @@ def ensure_absolute_url(href, base_url):
         return urljoin(base_url, href)
     return href
 
-def scrape_job_search_result(job_box, existing_jobs):
+def scrape_job_search_result(job_box):
     """Extract job information from a search result box."""
     # Extract basic info
     title_tag = job_box.find("h3", class_="search-results-job-box-title")
@@ -365,51 +364,6 @@ def scrape_job_search_result(job_box, existing_jobs):
     
     return job_data
             
-def get_existing_jobs(service):
-    """Fetch existing jobs from the sheet to check for duplicates."""
-    try:
-        result = service.spreadsheets().values().get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=RANGE_NAME
-        ).execute()
-        
-        rows = result.get('values', [])
-        if not rows:
-            print("No data found in sheet")
-            return [], {}
-            
-        # Get headers from first row
-        headers = rows[0]
-        
-        # Create column index mapping
-        col_map = {header.lower(): idx for idx, header in enumerate(headers)}
-        required_headers = {'job title', 'department', 'closing date', 'salary min', 'salary max', 
-                          'location', 'reference', 'url', 'pdf path', 'scrape date'}
-        missing_headers = required_headers - set(h.lower() for h in headers)
-        if missing_headers:
-            print(f"Found headers: {headers}")
-            raise ValueError(f"Sheet is missing required headers: {missing_headers}")
-        
-        # Create a set of tuples (job title, department, closing_date) for easy matching
-        existing_jobs = {
-            (
-                row[col_map['job title']], 
-                row[col_map['department']], 
-                row[col_map['closing date']]
-            ): {
-                'salary_min': row[col_map['salary min']] if len(row) > col_map['salary min'] else None,
-                'salary_max': row[col_map['salary max']] if len(row) > col_map['salary max'] else None,
-                'location': row[col_map['location']] if len(row) > col_map['location'] else None,
-                'reference': row[col_map['reference']] if len(row) > col_map['reference'] else None
-            }
-            for row in rows[1:]  # Skip header row
-            if len(row) > max(col_map['job title'], col_map['department'], col_map['closing date'])
-        }
-        
-        return headers, existing_jobs
-    except Exception as e:
-        print(f"Error fetching existing jobs: {e}")
-        return []
 
 def extract_salary_range(soup):
     """Extract minimum and maximum salary from the job page."""
@@ -443,7 +397,7 @@ def extract_reference(ref_elem):
     match = re.search(r'(?:Reference|Ref|Reference number)\s?:\s*([^\s]+)', ref_text, re.IGNORECASE)
     return match.group(1) if match else ref_text
 
-def scrape_job_page(job_data, output_folder, file_list, sheets_service):
+def scrape_job_page(job_data, output_folder, file_list, jobs_google_sheet, dry_run):
     print(f"\nFetching job page: {job_data['url']}")
     
     response = requests_session.get(job_data['url'], headers=HEADERS)
@@ -454,53 +408,25 @@ def scrape_job_page(job_data, output_folder, file_list, sheets_service):
     try:
         # Save PDF
         pdf_result = save_job_as_pdf(response.text, job_data['title'], job_data['department'], 
-                                   job_data['closing_date'], output_folder, file_list)
+                                     job_data['closing_date'], output_folder, file_list, dry_run)
         
         if pdf_result == ScrapeResult.NEW:
             # Update PDF path
             job_data['pdf_path'] = os.path.join(output_folder, 
                 sanitize_filename(f"{job_data['closing_date'] or datetime.now().strftime('%Y-%m-%d')} {job_data['title']} - {job_data['department']}.pdf"))
-            return True
             
+            success = jobs_google_sheet.update_job_in_sheet(job_data, dry_run)
+            return success
         return False
     except Exception as e:
         print(f"Error saving PDF: {e}")
         return False
 
-
-def initialize_sheets_service():
-    """Initialize and return Google Sheets service."""
-    try:
-        # Load credentials from service account file
-        if os.path.exists('job-scraper-service-account-key.json'):
-            # for local use
-            creds = ServiceAccountCredentials.from_service_account_file(
-                'job-scraper-service-account-key.json',
-                scopes=SCOPES
-            )
-        else:
-            # for GitHub Actions use
-            service_account_info = os.environ.get('GOOGLE_SERVICE_ACCOUNT_KEY')
-            if not service_account_info:
-                raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY environment variable not found")
-            service_account_dict = json.loads(service_account_info)
-            creds = ServiceAccountCredentials.from_service_account_info(
-                service_account_dict,
-                scopes=SCOPES
-            )
-
-        # Build the service
-        service = build('sheets', 'v4', credentials=creds)
-        return service
-    except Exception as e:
-        print(f"Error initializing Sheets service: {e}")
-        return None
-
-def append_to_sheets(service, job_data, headers):
-    """Append a row of job data to Google Sheets."""
-    try:
-        # Create a mapping of expected column names to job_data keys
-        column_mapping = {
+class JobsGoogleSheet:
+    def __init__(self):
+        self.service = self._initialize_service()
+        # Map of sheet column names to job_data keys
+        self.column_mapping = {
             'scrape date': 'date',
             'job title': 'title',
             'department': 'department',
@@ -512,41 +438,166 @@ def append_to_sheets(service, job_data, headers):
             'location': 'location',
             'reference': 'reference'
         }
-        
-        # Build row based on header order
-        row = []
-        for header in headers:
-            header_lower = header.lower()
-            if header_lower in column_mapping:
-                value = job_data.get(column_mapping[header_lower], '')
-                row.append(value if value is not None else '')
+        self.init_job_index()
+
+    def _initialize_service(self):
+        """Initialize and return Google Sheets service."""
+        try:
+            # Load credentials from service account file
+            if os.path.exists('job-scraper-service-account-key.json'):
+                # for local use
+                creds = ServiceAccountCredentials.from_service_account_file(
+                    'job-scraper-service-account-key.json',
+                    scopes=SCOPES
+                )
             else:
-                print(f"Warning: Unexpected column header found: {header}")
-                row.append('')
-        
-        body = {
-            'values': [row]
-        }
-        
-        result = service.spreadsheets().values().append(
-            spreadsheetId=SPREADSHEET_ID,
-            range=RANGE_NAME,
-            valueInputOption='RAW',
-            insertDataOption='INSERT_ROWS',
-            body=body
-        ).execute()
-        
-        # Extract the row number from the result
-        updated_range = result['updates']['updatedRange']  # e.g., "Sheet1!A11:D11"
-        row_number = int(updated_range.split('!')[1].split(':')[0][1:])
+                # for GitHub Actions use
+                service_account_info = os.environ.get('GOOGLE_SERVICE_ACCOUNT_KEY')
+                if not service_account_info:
+                    raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY environment variable not found")
+                service_account_dict = json.loads(service_account_info)
+                creds = ServiceAccountCredentials.from_service_account_info(
+                    service_account_dict,
+                    scopes=SCOPES
+                )
 
-        print(f"Appended job data to Google Sheets, row {row_number}")
-        return True
-    except HttpError as e:
-        print(f"Error appending to Google Sheets: {e}")
-        return False
+            # Build the service
+            service = build('sheets', 'v4', credentials=creds)
+            return service
+        except Exception as e:
+            print(f"Error initializing Sheets service: {e}")
+            return None
 
-def save_job_as_pdf(input_html, job_title, department, closing_date, output_folder, file_list):
+    def get_job_row(self, job_data):
+        lookup_key = self._job_lookup_keys(job_data)[0]
+        if lookup_key is None:
+            lookup_key = self._job_lookup_keys(job_data)[1]
+        return self.job_index.get(lookup_key)
+
+    def _job_lookup_keys(self, job_data):
+        return (
+            job_data.get('reference'),
+            (job_data['title'], job_data['department'], job_data['closing_date'])
+        )
+    
+    def add_job_to_index(self, job_data, row_number):
+        for lookup_key in self._job_lookup_keys(job_data):
+            self.job_index[lookup_key] = row_number
+        self.num_jobs += 1
+
+    def init_job_index(self):
+        """Fetch existing jobs from the sheet."""
+        try:
+            result = self.service.spreadsheets().values().get(
+                spreadsheetId=SPREADSHEET_ID,
+                range=RANGE_NAME
+            ).execute()
+            
+            rows = result.get('values', [])
+            if not rows:
+                print("No data found in sheet")
+                return {}
+            
+            self.headers = rows[0]
+       
+            # Create column index mapping
+            self.column_indexes = {header.lower(): idx for idx, header in enumerate(self.headers)}
+            required_headers = {'job title', 'department', 'closing date', 'salary min', 'salary max', 
+                            'location', 'reference', 'url', 'pdf path', 'scrape date'}
+            missing_headers = required_headers - set(h.lower() for h in self.headers)
+            if missing_headers:
+                print(f"Found headers: {self.headers}")
+                raise ValueError(f"Sheet is missing required headers: {missing_headers}")
+            
+            # Create an index of jobs
+            self.job_index = {}
+            self.num_jobs = 0
+            for i, row in enumerate(rows[1:]):  # Skip header row
+                job_data = {self.column_mapping[header]: row[self.column_indexes[header]]
+                            for header in required_headers
+                            if self.column_indexes[header] < len(row)}
+                self.add_job_to_index(job_data, row_number=i+2)
+                
+            return self.job_index
+        except Exception as e:
+            print(f"Error fetching existing jobs: {e}")
+            return []
+        
+    def append_to_sheets(self, job_data, dry_run):
+        """Append a job to Google Sheets."""
+        try:
+            # Build row based on header order
+            row = []
+            for header in self.headers:
+                header_lower = header.lower()
+                if header_lower in self.column_mapping:
+                    value = job_data.get(self.column_mapping[header_lower], '')
+                    row.append(value if value is not None else '')
+                else:
+                    print(f"Warning: Unexpected column header found: {header}")
+                    row.append('')
+            
+            body = {
+                'values': [row]
+            }
+            
+            if not dry_run:
+                result = self.service.spreadsheets().values().append(
+                    spreadsheetId=SPREADSHEET_ID,
+                    range=RANGE_NAME,
+                    valueInputOption='RAW',
+                    insertDataOption='INSERT_ROWS',
+                    body=body
+                ).execute()
+                
+                # Extract the row number from the result
+                updated_range = result['updates']['updatedRange']  # e.g., "Sheet1!A11:D11"
+                row_number = int(updated_range.split('!')[1].split(':')[0][1:])
+
+                self.add_job_to_index(job_data, row_number)
+
+                print(f"Appended job data to Google Sheets, row {row_number}")
+                return True
+            else:
+                print(f"DRY-RUN, but would have: Appended job data to Google Sheets")
+                return True
+        except HttpError as e:
+            print(f"Error appending to Google Sheets: {e}")
+            return False
+
+    def update_job_in_sheet(self, job_data, dry_run):
+        
+        try:
+            row_index = self.get_job_row(job_data)
+            
+            if row_index is not None and not dry_run:
+                # Update the PDF path cell
+                update_range = f"{chr(65 + self.column_indexes['pdf path'])}{row_index}"
+                update_body = {
+                    'values': [[job_data['pdf_path']]]
+                }
+                
+                self.service.spreadsheets().values().update(
+                    spreadsheetId=SPREADSHEET_ID,
+                    range=update_range,
+                    valueInputOption='RAW',
+                    body=update_body
+                ).execute()
+                
+                print(f"Updated PDF path in sheet for job: {job_data['title']}")
+                return True
+            elif dry_run:
+                print(f"DRY-RUN, but would have: Updated PDF path in sheet for job: {job_data['title']}")
+                return True
+            else:
+                print(f"Could not find matching row for job: {job_data['title']}")
+                return False
+                
+        except Exception as e:
+            print(f"Error updating sheet with PDF path: {e}")
+            return False
+        
+def save_job_as_pdf(input_html, job_title, department, closing_date, output_folder, file_list, dry_run):
     # Create filename with closing date, or today if not available
     date = closing_date or datetime.now().strftime('%Y-%m-%d')
     filename_base = sanitize_filename(f"{date} {job_title} - {department}")
@@ -557,22 +608,28 @@ def save_job_as_pdf(input_html, job_title, department, closing_date, output_fold
         print(f"File already exists on GitHub: {pdf_file_path}")
         return ScrapeResult.EXISTING
 
-    try:
-        html = HTML(string=input_html)
-        html.write_pdf(pdf_file_path)
-        print(f"Saved job PDF {pdf_file_path}")
-    except Exception as e:
-        print(f"Error saving PDF '{pdf_file_path}': {e}")
-        raise
+    if not dry_run:
+        try:
+            html = HTML(string=input_html)
+            html.write_pdf(pdf_file_path)
+            print(f"Saved job PDF {pdf_file_path}")
+        except Exception as e:
+            print(f"Error saving PDF '{pdf_file_path}': {e}")
+            raise
+    else:
+        print(f"DRY-RUN, but would have: Saved job PDF {pdf_file_path}")
 
-    if github_token:
-        success = upload_to_github(pdf_file_path, github_token)
-        if success:
-            print(f"Uploaded job PDF {pdf_file_path}")
-            return ScrapeResult.NEW
-        else:
-            print(f"ERROR uploading job PDF {pdf_file_path}")
+    if not dry_run and github_token:
+        try:
+            upload_to_github(pdf_file_path, github_token)
+        except Exception as e:
+            print(f"ERROR uploading job PDF {pdf_file_path}: {e}")
             raise Exception("Failed to upload to GitHub")
+        print(f"Uploaded job PDF {pdf_file_path}")
+        return ScrapeResult.NEW
+    elif dry_run:
+        print(f"DRY-RUN, but would have: Uploaded job PDF {pdf_file_path}")
+        return ScrapeResult.NEW
     else:
         print(f"ERROR: No GitHub token to upload {pdf_file_path}")
         raise Exception("No GitHub token available")
@@ -621,7 +678,9 @@ def upload_to_github(file_path, github_token):
     }
     
     response = requests_session.put(url, headers=headers, json=data)
-    return response.status_code == 201
+    if response.status_code != 201:
+        response.raise_for_status()
+        raise Exception(f"Expected 201 status, got {response.status_code} {response.body}")
 
 class RateLimitedRequestsSession(requests.Session):
     def __init__(self, rate_limit_enabled=True, delay=1.0):
@@ -642,11 +701,23 @@ class RateLimitedRequestsSession(requests.Session):
 
 requests_session = RateLimitedRequestsSession(rate_limit_enabled=not os.environ.get("DISABLE_RATELIMITING"))
 
+def parse_arguments():
+    parser = argparse.ArgumentParser(description='Job scraping script with command line options')
+    parser.add_argument('--dry-run', action='store_true', 
+                       help="Don't change the spreadsheet or upload PDFs")
+    return parser.parse_args()
+
 if __name__ == "__main__":
+    args = parse_arguments()
+    
     try:
-        stats = scrape_jobs(search_options_list=SEARCH_OPTIONS_LIST)
+        stats = scrape_jobs(
+            search_options_list=SEARCH_OPTIONS_LIST,
+            dry_run=args.dry_run
+        )
     except Exception as e:
         print(f"An error occurred: {e}")
         sys.exit(1)
+
     if stats.errored:
         sys.exit(1)
