@@ -34,7 +34,7 @@ class TestJobScraping(unittest.TestCase):
 
     def test_scrape_job_search_result(self):
         # Call the function with our sample data
-        job_data = scrape_job_search_result(self.soup, {})
+        job_data = scrape_job_search_result(self.soup)
 
         # Assert all the expected fields are present and correct
         self.assertEqual(job_data['title'], 'Head of Category / International Development Programmes')
@@ -100,7 +100,7 @@ class TestJobScraping(unittest.TestCase):
                 soup = BeautifulSoup(html, 'html.parser')
                 
                 # Extract job data and check date
-                job_data = scrape_job_search_result(soup, {})
+                job_data = scrape_job_search_result(soup)
                 self.assertEqual(job_data['closing_date'], expected_date)
 
 if __name__ == '__main__':
