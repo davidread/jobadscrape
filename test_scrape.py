@@ -5,7 +5,7 @@ from datetime import datetime
 # Import the function to test
 from scrape import scrape_job_search_result, extract_salary_range, extract_reference
 
-class TestJobScraping(unittest.TestCase):
+class TestScrapeJobSearchResult(unittest.TestCase):
     def setUp(self):
         # Sample HTML for a job listing
         self.sample_html = """
@@ -102,6 +102,16 @@ class TestJobScraping(unittest.TestCase):
                 # Extract job data and check date
                 job_data = scrape_job_search_result(soup)
                 self.assertEqual(job_data['closing_date'], expected_date)
+            
+    def test_no_results(self):
+        soup = BeautifulSoup('''
+            <li class="search-results-job-box" title="Your search matched no jobs">
+                <h3>Your search matched no jobs</h3><br>
+                There are no vacancies that match your search. Try searching again with expanded criteria or expanding the postcode radius.
+            </li>
+            ''', 'html.parser').find_all("li", class_="search-results-job-box")[0]
+        job_data = scrape_job_search_result(soup)
+        self.assertEqual(job_data, None)
 
 if __name__ == '__main__':
     unittest.main()

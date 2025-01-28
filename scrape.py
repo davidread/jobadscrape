@@ -193,6 +193,8 @@ def scrape_jobs(search_options_list, dry_run):
                 try:
                     # Extract info from search result
                     job_data = scrape_job_search_result(job_result)
+                    if job_data is None:
+                        continue
                     
                     if what_exact_match and what_exact_match.lower() not in job_data['title'].lower():
                         # Require an exact match in the job title.
@@ -291,6 +293,9 @@ def ensure_absolute_url(href, base_url):
 
 def scrape_job_search_result(job_box):
     """Extract job information from a search result box."""
+    if job_box.attrs.get("title") == "Your search matched no jobs":
+        return
+
     # Extract basic info
     title_tag = job_box.find("h3", class_="search-results-job-box-title")
     job_title = title_tag.get_text(strip=True)
