@@ -16,6 +16,17 @@ pip install -r requirements.txt
 brew install cairo pango gobject-introspection
 ```
 
+If you get error `OSError: cannot load library 'libgobject-2.0-0'` then add to your shell (e.g. `.zshrc`):
+```sh
+# library paths
+export LIBRARY_PATH="/opt/homebrew/lib:$LIBRARY_PATH"
+export DYLD_LIBRARY_PATH="/opt/homebrew/lib:$DYLD_LIBRARY_PATH"
+```
+and reload it:
+```sh
+source ~/.zshrc
+```
+
 For uploading results to the Google Sheets, setup and download the Google Service Account token, that has permission to write to the sheet:
 
 * Go to Google Cloud Console
