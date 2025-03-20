@@ -3,3 +3,4 @@ __pycache__/
 venv
 jobs/
 job-scraper-service-account-key.json
+.github-token

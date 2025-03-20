@@ -33,19 +33,25 @@ For uploading results to the Google Sheets, setup and download the Google Servic
 * Create a new project
 * Enable the Google Sheets API
 * Create a service account
-* Download the service account key JSON file as `job-scraper-service-account-key.json`
+* Download the service account key JSON file and save as `~/.gcloud/job-scraper-service-account-key.json`
 * In the Sheet, share it with the service account's email address
 
-For saving PDF files to GitHub, generate a [personal access token](https://github.com/settings/tokens) and export the value:
+For saving PDF files to GitHub, you need a Personal Access Token (PAT):
 
-```sh
-export GITHUB_TOKEN=...
-```
+* Generate a [personal access token](https://github.com/settings/tokens)
+* Save it in `.github-token` (alternatively `export GITHUB_TOKEN=...`))
 
 ## Run
 
 ```
 . venv/bin/activate
-export GITHUB_TOKEN=...
+python3 scrape.py --dry-run
 python3 scrape.py
+```
+
+## Tests
+
+```
+. venv/bin/activate
+python3 test_scrape.py
 ```

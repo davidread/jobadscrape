@@ -112,7 +112,7 @@ def scrape_jobs(search_options_list, dry_run):
     stats = ScrapingStats()
 
     # Fetch a list of PDFs already in GitHub
-    github_token = os.environ.get("GITHUB_TOKEN")
+    github_token = get_github_token()
     file_list = fetch_all_files_from_github(github_token) if github_token else []
 
     # Initialize Google Sheets service
@@ -449,10 +449,11 @@ class JobsGoogleSheet:
         """Initialize and return Google Sheets service."""
         try:
             # Load credentials from service account file
-            if os.path.exists('job-scraper-service-account-key.json'):
+            key_path = os.path.expanduser('~/.gcloud/job-scraper-service-account-key.json')
+            if os.path.exists(key_path):
                 # for local use
                 creds = ServiceAccountCredentials.from_service_account_file(
-                    'job-scraper-service-account-key.json',
+                    key_path,
                     scopes=SCOPES
                 )
             else:
@@ -607,7 +608,7 @@ def save_job_as_pdf(input_html, job_title, department, closing_date, output_fold
     date = closing_date or datetime.now().strftime('%Y-%m-%d')
     filename_base = sanitize_filename(f"{date} {job_title} - {department}")
     pdf_file_path = os.path.join(output_folder, f"{filename_base}.pdf")
-    github_token = os.environ.get("GITHUB_TOKEN")
+    github_token = get_github_token()
 
     if check_if_file_exists(pdf_file_path, file_list):
         print(f"File already exists on GitHub: {pdf_file_path}")
@@ -705,6 +706,16 @@ class RateLimitedRequestsSession(requests.Session):
         return response
 
 requests_session = RateLimitedRequestsSession(rate_limit_enabled=not os.environ.get("DISABLE_RATELIMITING"))
+
+def get_github_token():
+    # try file
+    token_filepath = ".github-token"
+    if os.path.exists(token_filepath):
+        with open(token_filepath, "r") as f:
+            return f.read().strip()
+        
+    # try env variable
+    return os.environ.get("GITHUB_TOKEN")
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Job scraping script with command line options')
