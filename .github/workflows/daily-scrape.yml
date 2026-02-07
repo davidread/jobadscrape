@@ -36,7 +36,9 @@ jobs:
 
     - name: Install Chromium for Playwright
       run: |    
-        playwright install chromium
+        # --with-deps installs OS-level browser dependencies too
+        # grep filters out progress bar lines that clutter CI logs
+        playwright install --with-deps chromium 2>&1 | grep -v '^|'
     
     - name: Run scraper
       env:
