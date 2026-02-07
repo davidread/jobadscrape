@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ALTCHA Demo</title>
+    <script type="module" src="https://cdn.jsdelivr.net/npm/altcha/dist/altcha.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+        }
+        form {
+            max-width: 400px;
+        }
+        button {
+            margin-top: 10px;
+            padding: 10px 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>ALTCHA Proof of Work Demo</h1>
+    
+    <form id="myForm">
+        <altcha-widget
+            test="true"
+            hidelogo="true"
+            hidefooter="true"
+            auto="off"
+            strings='{"label":"I&apos;m not a robot"}'
+        ></altcha-widget>
+        
+        <br>
+        <button type="submit">Continue</button>
+    </form>
+
+    <script>
+        let isVerified = false;
+        
+        const altcha = document.querySelector('altcha-widget');
+        
+        // Listen for verification events
+        altcha.addEventListener('statechange', (ev) => {
+            console.log('State changed:', ev.detail);
+            if (ev.detail.state === 'verified') {
+                isVerified = true;
+            }
+        });
+
+        document.getElementById('myForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            if (isVerified) {
+                alert('Verification successful!');
+                // Continue with form submission or redirect
+            } else {
+                alert('Please complete the ALTCHA verification');
+            }
+        });
+    </script>
+</body>
+</html>

@@ -14,6 +14,8 @@ pip install --upgrade pip
 pip install -r requirements.txt
 # weasyprint dependencies
 brew install cairo pango gobject-introspection
+# chromium
+playwright install chromium
 ```
 
 If you get error `OSError: cannot load library 'libgobject-2.0-0'` then add to your shell (e.g. `.zshrc`):

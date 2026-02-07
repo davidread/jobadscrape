@@ -4,6 +4,7 @@ weasyprint
 google-api-python-client
 google-auth-httplib2
 google-auth-oauthlib
+playwright
 
 # solve compatibility issue with urllib3 and LibreSSL on macOS
 urllib3==1.26.6
