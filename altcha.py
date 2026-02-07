@@ -430,7 +430,7 @@ async def solve_altcha(url, headless=True, user_agent=None):
 
         context = await browser.new_context(
             viewport={'width': 1920, 'height': 1080},
-            user_agent=user_agent or 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            user_agent=user_agent,
             locale='en-US',
             timezone_id='Europe/London',
         )

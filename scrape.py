@@ -66,8 +66,9 @@ SEARCH_OPTIONS_LIST = [
     },
 ]
 BASE_URL = "https://www.civilservicejobs.service.gov.uk"
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0"
+    "User-Agent": USER_AGENT,
 }
 
 # Data saved to Google Sheets
@@ -127,7 +128,7 @@ def solve_captcha():
     """Solve the ALTCHA captcha and transfer cookies to the requests session."""
     logger.info("Solving ALTCHA captcha...")
     captcha_url = f"{BASE_URL}/csr/index.cgi"
-    cookies = asyncio.run(solve_altcha(captcha_url, headless=True))
+    cookies = asyncio.run(solve_altcha(captcha_url, headless=True, user_agent=USER_AGENT))
     for cookie in cookies:
         requests_session.cookies.set(
             cookie['name'], cookie['value'],
