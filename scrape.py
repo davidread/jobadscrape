@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 from base64 import b64encode
 from collections import defaultdict
 from datetime import datetime
@@ -11,6 +12,7 @@ import sys
 import time
 from urllib.parse import urljoin, urlparse
 
+from altcha import solve_altcha
 from bs4 import BeautifulSoup
 from google.oauth2.credentials import Credentials
 from google.oauth2.service_account import Credentials as ServiceAccountCredentials
@@ -47,6 +49,10 @@ SEARCH_OPTIONS_LIST = [
         "what": "technical architect",
         "what_exact_match": "architect",  # to avoid matching on body text
         "output folder": "technical-architect",
+    },
+    {
+        "what": "technologist",
+        "output folder": "technologist",
     },
 ]
 BASE_URL = "https://www.civilservicejobs.service.gov.uk"
@@ -107,6 +113,19 @@ class ScrapingStats:
             print(f"  ERRORS: {errors} ({(errors/total_jobs * 100):.1f}%)")
         print("=====================")
 
+def solve_captcha():
+    """Solve the ALTCHA captcha and transfer cookies to the requests session."""
+    print("Solving ALTCHA captcha...")
+    captcha_url = f"{BASE_URL}/csr/index.cgi"
+    cookies = asyncio.run(solve_altcha(captcha_url, headless=True))
+    for cookie in cookies:
+        requests_session.cookies.set(
+            cookie['name'], cookie['value'],
+            domain=cookie.get('domain', ''),
+            path=cookie.get('path', '/'),
+        )
+    print(f"ALTCHA solved, {len(cookies)} cookies transferred to session")
+
 def scrape_jobs(search_options_list, dry_run):
     print("Starting job scraping...\n")
     stats = ScrapingStats()
@@ -121,7 +140,8 @@ def scrape_jobs(search_options_list, dry_run):
         print("Warning: Google Sheets service not initialized. Will continue without saving to sheets.")
     else:
         print(f"Found {jobs_google_sheet.num_jobs} existing jobs in sheet")
-   
+
+    solve_captcha()
     sid = get_fresh_sid()
     reqsig = get_reqsig(sid)
 

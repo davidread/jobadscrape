@@ -1,7 +1,6 @@
 import asyncio
 import random
 import time
-from pathlib import Path
 from playwright.async_api import async_playwright, Page, Response
 import logging
 from typing import Optional, Dict, Any
@@ -24,8 +23,6 @@ class CaptchaTester:
         self.captcha_page_url = captcha_page_url
         self.challenge_url_pattern = challenge_url_pattern
         self.challenge_response: Optional[Dict[Any, Any]] = None
-        self.screenshot_dir = Path("./captcha_test_screenshots")
-        self.screenshot_dir.mkdir(exist_ok=True)
         
     async def random_delay(self, min_ms: int, max_ms: int):
         """Add a random human-like delay"""
@@ -94,7 +91,6 @@ class CaptchaTester:
             checkbox_selectors = [
                 "altcha-widget input[type='checkbox']",
                 "altcha-widget .altcha-checkbox input",
-                "#altcha_checkbox_67113785",
                 "input[id^='altcha_checkbox_']"  # Starts with altcha_checkbox_
             ]
             
@@ -164,7 +160,6 @@ class CaptchaTester:
             
         except Exception as e:
             logger.error(f"❌ Error clicking checkbox: {e}")
-            await self.take_screenshot(page, "checkbox_click_error")
             raise CaptchaTestError(f"Failed to click checkbox: {e}")
     
     async def wait_for_proof_of_work(self, page: Page, timeout_ms: int = 60000):
@@ -236,7 +231,6 @@ class CaptchaTester:
         
         # Timeout reached
         logger.error("❌ Proof-of-work timeout reached (60 seconds)")
-        await self.take_screenshot(page, "proof_of_work_timeout")
         
         # Try to get final state for debugging
         try:
@@ -248,16 +242,6 @@ class CaptchaTester:
             pass
             
         raise CaptchaTestError("Proof-of-work completion timeout after 60 seconds")
-    
-    async def take_screenshot(self, page: Page, name: str):
-        """Take a screenshot for debugging"""
-        try:
-            timestamp = int(time.time())
-            filepath = self.screenshot_dir / f"{name}_{timestamp}.png"
-            await page.screenshot(path=str(filepath), full_page=True)
-            logger.info(f"📸 Screenshot saved: {filepath}")
-        except Exception as e:
-            logger.error(f"Failed to take screenshot: {e}")
     
     async def click_continue_button(self, page: Page):
         """Click the Continue button and verify navigation"""
@@ -306,10 +290,7 @@ class CaptchaTester:
                 # Wait for either navigation or network to be idle
                 await page.wait_for_load_state("networkidle", timeout=10000)
                 logger.info("✅ Page navigation completed!")
-                
-                # Take screenshot of the new page
-                await self.take_screenshot(page, "after_continue")
-                
+
                 # Get the new URL
                 new_url = page.url
                 logger.info(f"🌐 Current URL: {new_url}")
@@ -322,15 +303,12 @@ class CaptchaTester:
                 new_url = page.url
                 if new_url != self.captcha_page_url:
                     logger.info(f"✅ Navigation successful despite timeout. New URL: {new_url}")
-                    await self.take_screenshot(page, "after_continue")
                     return True
                 else:
-                    await self.take_screenshot(page, "navigation_failed")
                     raise CaptchaTestError("Navigation did not occur after clicking Continue")
             
         except Exception as e:
             logger.error(f"❌ Error clicking Continue button: {e}")
-            await self.take_screenshot(page, "continue_button_error")
             raise CaptchaTestError(f"Failed to click Continue button: {e}")
     
     async def run_test(self):
@@ -369,7 +347,6 @@ class CaptchaTester:
                 # Navigate to captcha page
                 logger.info(f"🌐 Navigating to: {self.captcha_page_url}")
                 await page.goto(self.captcha_page_url, wait_until="networkidle", timeout=30000)
-                await self.take_screenshot(page, "01_page_loaded")
                 logger.info("✓ Page loaded successfully")
                 
                 # Human-like delay after page load (reading the page)
@@ -380,7 +357,6 @@ class CaptchaTester:
                 logger.info("STEP 1: Clicking ALTCHA checkbox")
                 logger.info("─" * 70)
                 await self.find_and_click_checkbox(page)
-                await self.take_screenshot(page, "02_checkbox_clicked")
                 
                 # Small delay after clicking
                 await self.random_delay(300, 600)
@@ -390,7 +366,6 @@ class CaptchaTester:
                 logger.info("STEP 2: Waiting for proof-of-work computation")
                 logger.info("─" * 70)
                 await self.wait_for_proof_of_work(page, timeout_ms=60000)
-                await self.take_screenshot(page, "03_captcha_verified")
                 
                 # Step 3: Click Continue
                 logger.info("\n" + "─" * 70)
@@ -439,22 +414,76 @@ class CaptchaTester:
                 return False
 
 
+async def solve_altcha(url, headless=True, user_agent=None):
+    """Solve the ALTCHA captcha and return cookies for use with a requests session.
+
+    Args:
+        url: The URL of the page with the ALTCHA captcha.
+        headless: Whether to run the browser in headless mode.
+        user_agent: Browser user-agent string. Defaults to a Chrome UA.
+
+    Returns:
+        List of cookie dicts from the browser session.
+    """
+    tester = CaptchaTester(captcha_page_url=url)
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=headless,
+            slow_mo=50 if not headless else 0,
+        )
+
+        context = await browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            user_agent=user_agent or 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            locale='en-US',
+            timezone_id='Europe/London',
+        )
+
+        page = await context.new_page()
+        page.on("response", tester.response_handler)
+
+        logger.info(f"Navigating to: {url}")
+        await page.goto(url, wait_until="networkidle", timeout=30000)
+        await tester.random_delay(1000, 2000)
+
+        await tester.find_and_click_checkbox(page)
+        await tester.random_delay(300, 600)
+        await tester.wait_for_proof_of_work(page, timeout_ms=60000)
+
+        label = await page.query_selector("altcha-widget .altcha-label")
+        if label:
+            label_text = await label.inner_text()
+            logger.info(f"ALTCHA label text: '{label_text.strip()}'")
+
+        await tester.click_continue_button(page)
+
+        # Allow time for cookies to be set after navigation
+        await asyncio.sleep(1)
+
+        cookies = await context.cookies()
+        await browser.close()
+
+        logger.info(f"ALTCHA solved, got {len(cookies)} cookies")
+        return cookies
+
+
 async def main():
     """Example usage"""
-    
+
     # Configure your test parameters
     # CAPTCHA_PAGE_URL = "file:///Users/dread/jobadscrape/altcha.html"
     CAPTCHA_PAGE_URL = "https://www.civilservicejobs.service.gov.uk/csr/index.cgi"
     CHALLENGE_URL_PATTERN = "ProtectCaptcha=1"  # Matches the challengeurl parameter
-    
+
     # Create and run the tester
     tester = CaptchaTester(
         captcha_page_url=CAPTCHA_PAGE_URL,
         challenge_url_pattern=CHALLENGE_URL_PATTERN
     )
-    
+
     success = await tester.run_test()
-    
+
     if success:
         logger.info("\n🎉 TEST PASSED ✓\n")
         return 0
