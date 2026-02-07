@@ -5,11 +5,6 @@ from playwright.async_api import async_playwright, Page, Response
 import logging
 from typing import Optional, Dict, Any
 
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 
@@ -500,5 +495,10 @@ async def main():
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s %(message)s',
+        datefmt='%H:%M',
+    )
     exit_code = asyncio.run(main())
     exit(exit_code)

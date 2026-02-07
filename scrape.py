@@ -5,12 +5,20 @@ from collections import defaultdict
 from datetime import datetime
 from enum import Enum, auto
 import json
+import logging
 import os
-from pprint import pprint
 import re
 import sys
 import time
 from urllib.parse import urljoin, urlparse
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(message)s',
+    datefmt='%H:%M',
+)
+logging.getLogger('weasyprint').setLevel(logging.ERROR)
+logger = logging.getLogger(__name__)
 
 from altcha import solve_altcha
 from bs4 import BeautifulSoup
@@ -19,8 +27,6 @@ from google.oauth2.service_account import Credentials as ServiceAccountCredentia
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import requests
-import logging
-logging.getLogger('weasyprint').setLevel(logging.ERROR)
 from weasyprint import HTML
 
 # Scrape
@@ -28,7 +34,7 @@ SEARCH_OPTIONS_LIST = [
     {
         "department": "256999", # "Government Digital Service"
         "output folder": "gds",
-    }, 
+    },
     {
         "department": "258439", # "Central Digital and Data Office"
         "output folder": "cddo",
@@ -67,7 +73,7 @@ HEADERS = {
 # https://docs.google.com/spreadsheets/d/1Ugt9kMQq-S8q1fm3u8RNKjNb2-fwiXDhf4ooFirGIRs/edit?usp=sharing
 SPREADSHEET_ID = '1Ugt9kMQq-S8q1fm3u8RNKjNb2-fwiXDhf4ooFirGIRs'
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-RANGE_NAME = 'Sheet1!A:Z' 
+RANGE_NAME = 'Sheet1!A:Z'
 
 # PDFs saved to Github
 REPO_OWNER = "davidread"
@@ -83,42 +89,42 @@ class ScrapingStats:
     def __init__(self):
         self.stats = defaultdict(lambda: {result: 0 for result in ScrapeResult})
         self.errored = False
-        
+
     def add_job(self, id_, result):
         self.stats[id_][result] += 1
         if result == ScrapeResult.ERROR:
             self.errored = True
-    
+
     def print_summary(self):
-        print("\n=== Scraping Summary ===")
+        logger.info("=== Scraping Summary ===")
         total_by_result = defaultdict(int)
-        
+
         for id_, counts in self.stats.items():
             total = sum(counts.values())
-            
-            print(f"\n{id_}:")
-            print(f"  Total jobs found: {total}")
-            print(f"  New jobs uploaded: {counts[ScrapeResult.NEW]} ({(counts[ScrapeResult.NEW]/total * 100):.1f}%)")
-            print(f"  Existing jobs: {counts[ScrapeResult.EXISTING]}")
+
+            logger.info(f"{id_}:")
+            logger.info(f"  Total jobs found: {total}")
+            logger.info(f"  New jobs uploaded: {counts[ScrapeResult.NEW]} ({(counts[ScrapeResult.NEW]/total * 100):.1f}%)")
+            logger.info(f"  Existing jobs: {counts[ScrapeResult.EXISTING]}")
             if counts[ScrapeResult.ERROR]:
-                print(f"  ERRORS: {counts[ScrapeResult.ERROR]} ({(counts[ScrapeResult.ERROR]/total * 100):.1f}%)")
-            
+                logger.error(f"  ERRORS: {counts[ScrapeResult.ERROR]} ({(counts[ScrapeResult.ERROR]/total * 100):.1f}%)")
+
             for result, count in counts.items():
                 total_by_result[result] += count
-        
+
         total_jobs = sum(total_by_result.values())
-        print("\nOverall Summary:")
-        print(f"  Total jobs found: {total_jobs}")
-        print(f"  New jobs uploaded: {total_by_result[ScrapeResult.NEW]} ({(total_by_result[ScrapeResult.NEW]/total_jobs * 100):.1f}%)")
-        print(f"  Existing jobs: {total_by_result[ScrapeResult.EXISTING]}")
+        logger.info("Overall Summary:")
+        logger.info(f"  Total jobs found: {total_jobs}")
+        logger.info(f"  New jobs uploaded: {total_by_result[ScrapeResult.NEW]} ({(total_by_result[ScrapeResult.NEW]/total_jobs * 100):.1f}%)")
+        logger.info(f"  Existing jobs: {total_by_result[ScrapeResult.EXISTING]}")
         errors = total_by_result[ScrapeResult.ERROR]
         if errors:
-            print(f"  ERRORS: {errors} ({(errors/total_jobs * 100):.1f}%)")
-        print("=====================")
+            logger.error(f"  ERRORS: {errors} ({(errors/total_jobs * 100):.1f}%)")
+        logger.info("=====================")
 
 def solve_captcha():
     """Solve the ALTCHA captcha and transfer cookies to the requests session."""
-    print("Solving ALTCHA captcha...")
+    logger.info("Solving ALTCHA captcha...")
     captcha_url = f"{BASE_URL}/csr/index.cgi"
     cookies = asyncio.run(solve_altcha(captcha_url, headless=True))
     for cookie in cookies:
@@ -127,10 +133,10 @@ def solve_captcha():
             domain=cookie.get('domain', ''),
             path=cookie.get('path', '/'),
         )
-    print(f"ALTCHA solved, {len(cookies)} cookies transferred to session")
+    logger.info(f"ALTCHA solved, {len(cookies)} cookies transferred to session")
 
 def scrape_jobs(search_options_list, dry_run):
-    print("Starting job scraping...\n")
+    logger.info("Starting job scraping...")
     stats = ScrapingStats()
 
     # Fetch a list of PDFs already in GitHub
@@ -140,9 +146,9 @@ def scrape_jobs(search_options_list, dry_run):
     # Initialize Google Sheets service
     jobs_google_sheet = JobsGoogleSheet()
     if not jobs_google_sheet:
-        print("Warning: Google Sheets service not initialized. Will continue without saving to sheets.")
+        logger.warning("Google Sheets service not initialized. Will continue without saving to sheets.")
     else:
-        print(f"Found {jobs_google_sheet.num_jobs} existing jobs in sheet")
+        logger.info(f"Found {jobs_google_sheet.num_jobs} existing jobs in sheet")
 
     solve_captcha()
     sid = get_fresh_sid()
@@ -151,33 +157,13 @@ def scrape_jobs(search_options_list, dry_run):
     for search_options in search_options_list:
         output_folder = f'jobs/{search_options.pop("output folder")}'
         os.makedirs(output_folder, exist_ok=True)
-        
+
         # Perform search
         search_url = f"{BASE_URL}/csr/esearch.cgi"
         params = {"SID": sid}
         payload = {
             "reqsig": reqsig,
             "SID": sid,
-            # "what": None,
-            # "where": None,
-            # "id_postcodeselectorid": "#where",
-            # "distance": 10,
-            # "units": "miles",
-            # "overseas": 1,
-            # "oselect-filter-textbox": None,
-            # "oselect-filter-textbox": None,
-            # "salaryminimum": "NULL",
-            # "salarymaximum": "NULL",
-            # "oselect-filter-textbox": None,
-            # "oselect-filter-textbox": None,
-            # "oselect-filter-textbox": None,
-            # "update_button": "Update results",
-            # "csource": "csfsearch",
-            # "easting": None,
-            # "northing": None,
-            # "region": None,
-            # "id_chosen_placeholder_text_multiple": "resultpage",
-            # "whatoption": "words",
             }
         if "department" in search_options:
             payload["nghr_dept"] = search_options.pop("department")
@@ -191,26 +177,26 @@ def scrape_jobs(search_options_list, dry_run):
             what_exact_match = None
         assert not search_options, f"Unprocessed options {search_options}"
         filtered_payload = {k: v for k, v in payload.items() if k not in ['reqsig', 'SID']}
-        print(f"\nSearch: {filtered_payload}")
+        logger.info(f"Search: {filtered_payload}")
 
         # Page through results
         current_url = search_url
         page_number = 1
 
-        while True:            
+        while True:
             if page_number == 1:
                 # First page uses POST with payload
                 response = requests_session.post(current_url, data=payload, headers=HEADERS)
             else:
                 # Subsequent pages use GET with the full URL
-                print(f"\nProcessing page {page_number}")
+                logger.info(f"Processing page {page_number}")
                 response = requests_session.get(current_url, headers=HEADERS)
             response.raise_for_status()
-            
+
             # Parse search results
             soup = BeautifulSoup(response.text, "html.parser")
             job_results = soup.find_all("li", class_="search-results-job-box")
-            print(f"Found {len(job_results)} job listings on page {page_number}")
+            logger.info(f"Found {len(job_results)} job listings on page {page_number}")
 
             for job_result in job_results:
                 try:
@@ -218,22 +204,22 @@ def scrape_jobs(search_options_list, dry_run):
                     job_data = scrape_job_search_result(job_result)
                     if job_data is None:
                         continue
-                    
+
                     if what_exact_match and what_exact_match.lower() not in job_data['title'].lower():
                         # Require an exact match in the job title.
                         # The reason is that CSJ's search is very broad:
                         # e.g. "Intelligence Development Officer" job matches "Developer", probably due to stemming
                         # e.g. "User Researcher" job matches "Technical Architect", when the latter is mentioned as a colleague in the job description
-                        print(f'Ignoring job "{job_data["title"]}" as it is not an exact match of "{what_exact_match}"')
+                        logger.info(f'Ignoring job "{job_data["title"]}" as it is not an exact match of "{what_exact_match}"')
                         continue
 
                     # Check if job already exists in the sheet
                     row_in_sheet = jobs_google_sheet.get_job_row(job_data)
                     if row_in_sheet is not None:
-                        print(f"Job already exists in sheet - row {row_in_sheet}")
+                        logger.info(f"Job already exists in sheet - row {row_in_sheet}")
                         stats.add_job(output_folder, ScrapeResult.EXISTING)
                         continue
-                    
+
                     # Add to sheet
                     if jobs_google_sheet and jobs_google_sheet.append_to_sheets(job_data, dry_run):
                         # If successfully added to sheet, fetch full page and save PDF
@@ -243,17 +229,17 @@ def scrape_jobs(search_options_list, dry_run):
                             stats.add_job(output_folder, ScrapeResult.ERROR)
                     else:
                         stats.add_job(output_folder, ScrapeResult.ERROR)
-                        
+
                 except Exception as e:
-                    print(f"Error processing job box: {e}")
+                    logger.error(f"Error processing job box: {e}")
                     stats.add_job(output_folder, ScrapeResult.ERROR)
 
             # Check for next page
             next_url = get_next_page_url(soup, BASE_URL)
             if not next_url:
-                print(f"No more pages to process")
+                logger.info(f"No more pages to process")
                 break
-                
+
             current_url = next_url
             page_number += 1
 
@@ -268,19 +254,17 @@ def get_fresh_sid():
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html.parser")
-    
+
     # Option 1: Extract SID from a hidden input field (most common case)
     sid_input = soup.find("input", {"name": "SID"})
     if sid_input:
-        # print("SID from input field")
         return sid_input["value"]
 
     # Option 2: Extract SID from the URL in the "action" or "form" element
     form_action = soup.find("form")["action"]
     if "SID=" in form_action:
-        # print("SID from form URL")
         return form_action.split("SID=")[1].split("&")[0]
-    
+
 def get_reqsig(sid):
     url = f"{BASE_URL}/csr/esearch.cgi?SID="
     params = {"SID": sid}
@@ -301,7 +285,7 @@ def get_next_page_url(soup, base_url):
     pagination = soup.find_all("div", class_="search-results-paging-menu")
     if not pagination:
         return None
-        
+
     # Look for the "next »" link
     next_link = pagination[-1].find('a', string=lambda t: t and '»' in t)
     if next_link:
@@ -340,7 +324,7 @@ def scrape_job_search_result(job_box):
         location = location_elem.get_text(strip=True)
     else:
         location = None
-    
+
     # Extract reference
     ref_elem = job_box.find("div", class_="search-results-job-box-refcode")
     reference = extract_reference(ref_elem) if ref_elem else None
@@ -349,7 +333,7 @@ def scrape_job_search_result(job_box):
         ref_text = ref_elem.get_text(strip=True)
         match = re.search(r'(?:Reference|Ref|Reference number)\s?:\s*([^\s]+)', ref_text, re.IGNORECASE)
         reference = match.group(1) if match else ref_text
-    
+
     # Extract closing date
     closing_date = None
     closing_date_elem = job_box.find("div", class_="search-results-job-box-closingdate")
@@ -359,7 +343,7 @@ def scrape_job_search_result(job_box):
             # Remove any "Closing date: " prefix
             if ":" in date_text:
                 date_text = date_text.split(":", 1)[1].strip()
-            
+
             # Remove the time prefix and day of the week if present
             if " on " in date_text:
                 date_text = date_text.split(" on ", 1)[1].strip()
@@ -367,7 +351,7 @@ def scrape_job_search_result(job_box):
             # Remove any day of week if present
             if any(day in date_text for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']):
                 date_text = ' '.join(date_text.split(' ')[1:])
-                
+
             # Extract day, month, year
             day = ''.join(c for c in date_text.split()[0] if c.isdigit())
             month = date_text.split()[1]
@@ -375,8 +359,8 @@ def scrape_job_search_result(job_box):
             date_text = f"{day} {month} {year}"
             closing_date = datetime.strptime(date_text.strip(), '%d %B %Y').strftime('%Y-%m-%d')
         except Exception as e:
-            print(f"Error parsing date '{date_text}': {e}")
-    
+            logger.error(f"Error parsing date '{date_text}': {e}")
+
     job_data = {
         'date': datetime.now().strftime('%Y-%m-%d'),
         'title': job_title,
@@ -389,17 +373,11 @@ def scrape_job_search_result(job_box):
         'reference': reference,
         'pdf_path': '',  # Will be updated after saving PDF
     }
-    
-    print(f"\nFound job in search results:")
-    print(f"  Job title:  {job_title}")
-    print(f"  Department: {department}")
-    print(f"  Salary:     £{salary_min} - £{salary_max}")
-    print(f"  Location:   {location}")
-    print(f"  Closes:     {closing_date}")
-    print(f"  Reference:  {reference}")
-    
+
+    logger.info(f"Found job: {job_title} - {department} - £{salary_min}-£{salary_max} - {location} - closes {closing_date} - ref {reference}")
+
     return job_data
-            
+
 
 def extract_salary_range(soup):
     """Extract minimum and maximum salary from the job page."""
@@ -417,7 +395,7 @@ def extract_salary_range(soup):
         r'From £([\d,]+)',   # From £30,000
         r'£([\d,]+)',        # £20,000
     ]
-    
+
     for pattern in patterns:
         match = re.search(pattern, salary_text)
         if match:
@@ -425,7 +403,7 @@ def extract_salary_range(soup):
             min_salary = groups[0].replace(',', '') if groups[0] else None
             max_salary = groups[1].replace(',', '') if len(groups) > 1 and groups[1] else min_salary
             return min_salary, max_salary
-            
+
     return salary_text, None
 
 def extract_reference(ref_elem):
@@ -434,28 +412,28 @@ def extract_reference(ref_elem):
     return match.group(1) if match else ref_text
 
 def scrape_job_page(job_data, output_folder, file_list, jobs_google_sheet, dry_run):
-    print(f"\nFetching job page: {job_data['url']}")
-    
+    logger.info(f"Fetching job page: {job_data['url']}")
+
     response = requests_session.get(job_data['url'], headers=HEADERS)
     response.raise_for_status()
-    
+
     soup = BeautifulSoup(response.text, "html.parser")
-    
+
     try:
         # Save PDF
-        pdf_result = save_job_as_pdf(response.text, job_data['title'], job_data['department'], 
+        pdf_result = save_job_as_pdf(response.text, job_data['title'], job_data['department'],
                                      job_data['closing_date'], output_folder, file_list, dry_run)
-        
+
         if pdf_result == ScrapeResult.NEW:
             # Update PDF path
-            job_data['pdf_path'] = os.path.join(output_folder, 
+            job_data['pdf_path'] = os.path.join(output_folder,
                 sanitize_filename(f"{job_data['closing_date'] or datetime.now().strftime('%Y-%m-%d')} {job_data['title']} - {job_data['department']}.pdf"))
-            
+
             success = jobs_google_sheet.update_job_in_sheet(job_data, dry_run)
             return success
         return False
     except Exception as e:
-        print(f"Error saving PDF: {e}")
+        logger.error(f"Error saving PDF: {e}")
         return False
 
 class JobsGoogleSheet:
@@ -502,7 +480,7 @@ class JobsGoogleSheet:
             service = build('sheets', 'v4', credentials=creds, cache_discovery=False)
             return service
         except Exception as e:
-            print(f"Error initializing Sheets service: {e}")
+            logger.error(f"Error initializing Sheets service: {e}")
             return None
 
     def get_job_row(self, job_data):
@@ -516,7 +494,7 @@ class JobsGoogleSheet:
             job_data.get('reference'),
             (job_data['title'], job_data['department'], job_data['closing_date'])
         )
-    
+
     def add_job_to_index(self, job_data, row_number):
         for lookup_key in self._job_lookup_keys(job_data):
             self.job_index[lookup_key] = row_number
@@ -529,23 +507,23 @@ class JobsGoogleSheet:
                 spreadsheetId=SPREADSHEET_ID,
                 range=RANGE_NAME
             ).execute()
-            
+
             rows = result.get('values', [])
             if not rows:
-                print("No data found in sheet")
+                logger.warning("No data found in sheet")
                 return {}
-            
+
             self.headers = rows[0]
-       
+
             # Create column index mapping
             self.column_indexes = {header.lower(): idx for idx, header in enumerate(self.headers)}
-            required_headers = {'job title', 'department', 'closing date', 'salary min', 'salary max', 
+            required_headers = {'job title', 'department', 'closing date', 'salary min', 'salary max',
                             'location', 'reference', 'url', 'pdf path', 'scrape date'}
             missing_headers = required_headers - set(h.lower() for h in self.headers)
             if missing_headers:
-                print(f"Found headers: {self.headers}")
+                logger.error(f"Found headers: {self.headers}")
                 raise ValueError(f"Sheet is missing required headers: {missing_headers}")
-            
+
             # Create an index of jobs
             self.job_index = {}
             self.num_jobs = 0
@@ -554,12 +532,12 @@ class JobsGoogleSheet:
                             for header in required_headers
                             if self.column_indexes[header] < len(row)}
                 self.add_job_to_index(job_data, row_number=i+2)
-                
+
             return self.job_index
         except Exception as e:
-            print(f"Error fetching existing jobs: {e}")
+            logger.error(f"Error fetching existing jobs: {e}")
             return []
-        
+
     def append_to_sheets(self, job_data, dry_run):
         """Append a job to Google Sheets."""
         try:
@@ -571,13 +549,13 @@ class JobsGoogleSheet:
                     value = job_data.get(self.column_mapping[header_lower], '')
                     row.append(value if value is not None else '')
                 else:
-                    print(f"Warning: Unexpected column header found: {header}")
+                    logger.warning(f"Unexpected column header found: {header}")
                     row.append('')
-            
+
             body = {
                 'values': [row]
             }
-            
+
             if not dry_run:
                 result = self.service.spreadsheets().values().append(
                     spreadsheetId=SPREADSHEET_ID,
@@ -586,54 +564,54 @@ class JobsGoogleSheet:
                     insertDataOption='INSERT_ROWS',
                     body=body
                 ).execute()
-                
+
                 # Extract the row number from the result
                 updated_range = result['updates']['updatedRange']  # e.g., "Sheet1!A11:D11"
                 row_number = int(updated_range.split('!')[1].split(':')[0][1:])
 
                 self.add_job_to_index(job_data, row_number)
 
-                print(f"Appended job data to Google Sheets, row {row_number}")
+                logger.info(f"Appended job data to Google Sheets, row {row_number}")
                 return True
             else:
-                print(f"DRY-RUN, but would have: Appended job data to Google Sheets")
+                logger.info(f"DRY-RUN: Would have appended job data to Google Sheets")
                 return True
         except HttpError as e:
-            print(f"Error appending to Google Sheets: {e}")
+            logger.error(f"Error appending to Google Sheets: {e}")
             return False
 
     def update_job_in_sheet(self, job_data, dry_run):
-        
+
         try:
             row_index = self.get_job_row(job_data)
-            
+
             if row_index is not None and not dry_run:
                 # Update the PDF path cell
                 update_range = f"{chr(65 + self.column_indexes['pdf path'])}{row_index}"
                 update_body = {
                     'values': [[job_data['pdf_path']]]
                 }
-                
+
                 self.service.spreadsheets().values().update(
                     spreadsheetId=SPREADSHEET_ID,
                     range=update_range,
                     valueInputOption='RAW',
                     body=update_body
                 ).execute()
-                
-                print(f"Updated PDF path in sheet for job: {job_data['title']}")
+
+                logger.info(f"Updated PDF path in sheet for job: {job_data['title']}")
                 return True
             elif dry_run:
-                print(f"DRY-RUN, but would have: Updated PDF path in sheet for job: {job_data['title']}")
+                logger.info(f"DRY-RUN: Would have updated PDF path in sheet for job: {job_data['title']}")
                 return True
             else:
-                print(f"Could not find matching row for job: {job_data['title']}")
+                logger.error(f"Could not find matching row for job: {job_data['title']}")
                 return False
-                
+
         except Exception as e:
-            print(f"Error updating sheet with PDF path: {e}")
+            logger.error(f"Error updating sheet with PDF path: {e}")
             return False
-        
+
 def save_job_as_pdf(input_html, job_title, department, closing_date, output_folder, file_list, dry_run):
     # Create filename with closing date, or today if not available
     date = closing_date or datetime.now().strftime('%Y-%m-%d')
@@ -642,33 +620,33 @@ def save_job_as_pdf(input_html, job_title, department, closing_date, output_fold
     github_token = get_github_token()
 
     if check_if_file_exists(pdf_file_path, file_list):
-        print(f"File already exists on GitHub: {pdf_file_path}")
+        logger.info(f"File already exists on GitHub: {pdf_file_path}")
         return ScrapeResult.EXISTING
 
     if not dry_run:
         try:
             html = HTML(string=input_html)
             html.write_pdf(pdf_file_path)
-            print(f"Saved job PDF {pdf_file_path}")
+            logger.info(f"Saved job PDF {pdf_file_path}")
         except Exception as e:
-            print(f"Error saving PDF '{pdf_file_path}': {e}")
+            logger.error(f"Error saving PDF '{pdf_file_path}': {e}")
             raise
     else:
-        print(f"DRY-RUN, but would have: Saved job PDF {pdf_file_path}")
+        logger.info(f"DRY-RUN: Would have saved job PDF {pdf_file_path}")
 
     if not dry_run and github_token:
         try:
             upload_to_github(pdf_file_path, github_token)
         except Exception as e:
-            print(f"ERROR uploading job PDF {pdf_file_path}: {e}")
+            logger.error(f"Error uploading job PDF {pdf_file_path}: {e}")
             raise Exception("Failed to upload to GitHub")
-        print(f"Uploaded job PDF {pdf_file_path}")
+        logger.info(f"Uploaded job PDF {pdf_file_path}")
         return ScrapeResult.NEW
     elif dry_run:
-        print(f"DRY-RUN, but would have: Uploaded job PDF {pdf_file_path}")
+        logger.info(f"DRY-RUN: Would have uploaded job PDF {pdf_file_path}")
         return ScrapeResult.NEW
     else:
-        print(f"ERROR: No GitHub token to upload {pdf_file_path}")
+        logger.error(f"No GitHub token to upload {pdf_file_path}")
         raise Exception("No GitHub token available")
 
 
@@ -697,11 +675,11 @@ def check_if_file_exists(file_path, file_list):
     return file_path in file_list
 
 def upload_to_github(file_path, github_token):
-    
+
     # Read file content and encode in base64
     with open(file_path, 'rb') as file:
         content = b64encode(file.read()).decode()
-    
+
     # GitHub API call
     url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{file_path}"
     headers = {
@@ -713,7 +691,7 @@ def upload_to_github(file_path, github_token):
         "content": content,
         "REPO_BRANCH": REPO_BRANCH
     }
-    
+
     response = requests_session.put(url, headers=headers, json=data)
     if response.status_code != 201:
         response.raise_for_status()
@@ -731,7 +709,7 @@ class RateLimitedRequestsSession(requests.Session):
             elapsed = time.time() - self.last_request_time
             if elapsed < self.delay:
                 time.sleep(self.delay - elapsed)
-        
+
         response = super().request(*args, **kwargs)
         self.last_request_time = time.time()
         return response
@@ -744,26 +722,26 @@ def get_github_token():
     if os.path.exists(token_filepath):
         with open(token_filepath, "r") as f:
             return f.read().strip()
-        
+
     # try env variable
     return os.environ.get("GITHUB_TOKEN")
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Job scraping script with command line options')
-    parser.add_argument('--dry-run', action='store_true', 
+    parser.add_argument('--dry-run', action='store_true',
                        help="Don't change the spreadsheet or upload PDFs")
     return parser.parse_args()
 
 if __name__ == "__main__":
     args = parse_arguments()
-    
+
     try:
         stats = scrape_jobs(
             search_options_list=SEARCH_OPTIONS_LIST,
             dry_run=args.dry_run
         )
     except Exception as e:
-        print(f"An error occurred: {e}")
+        logger.error(f"An error occurred: {e}")
         sys.exit(1)
 
     if stats.errored:
