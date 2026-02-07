@@ -17,7 +17,6 @@ logging.basicConfig(
     format='%(asctime)s %(levelname)s %(message)s',
     datefmt='%H:%M',
 )
-logging.getLogger('weasyprint').setLevel(logging.ERROR)
 logger = logging.getLogger(__name__)
 
 from altcha import solve_altcha
@@ -28,6 +27,8 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import requests
 from weasyprint import HTML
+
+logging.getLogger('weasyprint').setLevel(logging.ERROR)
 
 # Scrape
 SEARCH_OPTIONS_LIST = [
