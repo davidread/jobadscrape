@@ -19,6 +19,8 @@ from google.oauth2.service_account import Credentials as ServiceAccountCredentia
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import requests
+import logging
+logging.getLogger('weasyprint').setLevel(logging.ERROR)
 from weasyprint import HTML
 
 # Scrape
@@ -488,7 +490,7 @@ class JobsGoogleSheet:
                 )
 
             # Build the service
-            service = build('sheets', 'v4', credentials=creds)
+            service = build('sheets', 'v4', credentials=creds, cache_discovery=False)
             return service
         except Exception as e:
             print(f"Error initializing Sheets service: {e}")
