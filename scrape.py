@@ -64,6 +64,10 @@ SEARCH_OPTIONS_LIST = [
         "what_exact_match": "technologist",  # to avoid matching "technologies"
         "output folder": "technologist",
     },
+    {
+        "what": "Site Reliability Engineer",
+        "output folder": "sre",
+    },
 ]
 BASE_URL = "https://www.civilservicejobs.service.gov.uk"
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
