@@ -323,15 +323,23 @@ def scrape_job_search_result(job_box):
     title_tag = job_box.find("h3", class_="search-results-job-box-title")
     job_title = title_tag.get_text(strip=True)
     job_link = title_tag.find("a")["href"]
-    department = job_box.find("div", class_="search-results-job-box-department").get_text(strip=True)
-    
+    dept_elem = job_box.find("div", class_="search-results-job-box-department")
+    for sr in dept_elem.find_all(class_="sr-only"):
+        sr.decompose()
+    department = dept_elem.get_text(strip=True)
+
     # Extract salary
     salary_elem = job_box.find("div", class_="search-results-job-box-salary")
     salary_min, salary_max = extract_salary_range(salary_elem) if salary_elem else (None, None)
-    
+
     # Extract location
     location_elem = job_box.find("div", class_="search-results-job-box-location")
-    location = location_elem.get_text(strip=True) if location_elem else None
+    if location_elem:
+        for sr in location_elem.find_all(class_="sr-only"):
+            sr.decompose()
+        location = location_elem.get_text(strip=True)
+    else:
+        location = None
     
     # Extract reference
     ref_elem = job_box.find("div", class_="search-results-job-box-refcode")

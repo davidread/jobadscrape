@@ -458,11 +458,18 @@ async def solve_altcha(url, headless=True, user_agent=None):
 
         await tester.click_continue_button(page)
 
-        # Allow time for cookies to be set after navigation
-        await asyncio.sleep(1)
+        # Wait for cookies to be set after navigation
+        for attempt in range(10):
+            await asyncio.sleep(1)
+            cookies = await context.cookies()
+            if cookies:
+                break
+            logger.info(f"Waiting for cookies... (attempt {attempt + 1})")
 
-        cookies = await context.cookies()
         await browser.close()
+
+        if not cookies:
+            raise CaptchaTestError("No cookies received after solving ALTCHA")
 
         logger.info(f"ALTCHA solved, got {len(cookies)} cookies")
         return cookies
