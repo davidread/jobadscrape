@@ -23,8 +23,8 @@ class TestScrapeJobSearchResult(unittest.TestCase):
                     </a>
                 </h3>
             </div>
-            <div class="search-results-job-box-department">Government Commercial Function</div>
-            <div class="search-results-job-box-location">Abercrombie House, East Kilbride, Glasgow (moving to Glasgow City Centre 2025/26) Or King Charles Street, London</div>
+            <div class="search-results-job-box-department"><h4 class="sr-only">Department</h4> Government Commercial Function</div>
+            <div class="search-results-job-box-location"><h4 class="sr-only">Location</h4> Abercrombie House, East Kilbride, Glasgow (moving to Glasgow City Centre 2025/26) Or King Charles Street, London</div>
             <div class="search-results-job-box-salary">Salary : £80,000 to £97,760</div>
             <div class="search-results-job-box-closingdate">Closes : 11:55 pm on Wednesday 22nd January 2025</div>
             <div class="search-results-job-box-refcode">Reference : 384891</div>
