@@ -54,6 +54,7 @@ SEARCH_OPTIONS_LIST = [
     },
     {
         "what": "technologist",
+        "what_exact_match": "technologist",  # to avoid matching "technologies"
         "output folder": "technologist",
     },
 ]
