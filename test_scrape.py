@@ -3,7 +3,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 
 # Import the function to test
-from scrape import scrape_job_search_result, extract_salary_range, extract_reference
+from scrape import scrape_job_search_result, extract_salary_range, extract_reference, job_meets_minimum_salary
 
 class TestScrapeJobSearchResult(unittest.TestCase):
     def setUp(self):
@@ -112,6 +112,36 @@ class TestScrapeJobSearchResult(unittest.TestCase):
             ''', 'html.parser').find_all("li", class_="search-results-job-box")[0]
         job_data = scrape_job_search_result(soup)
         self.assertEqual(job_data, None)
+
+class TestJobMeetsMinimumSalary(unittest.TestCase):
+    def test_max_salary_meets_minimum(self):
+        job_data = {'salary_min': '70000', 'salary_max': '90000'}
+        self.assertTrue(job_meets_minimum_salary(job_data, 80000))
+
+    def test_max_salary_below_minimum(self):
+        job_data = {'salary_min': '60000', 'salary_max': '75000'}
+        self.assertFalse(job_meets_minimum_salary(job_data, 80000))
+
+    def test_only_salary_min_set_meets(self):
+        job_data = {'salary_min': '85000', 'salary_max': None}
+        self.assertTrue(job_meets_minimum_salary(job_data, 80000))
+
+    def test_only_salary_min_set_below(self):
+        job_data = {'salary_min': '70000', 'salary_max': None}
+        self.assertFalse(job_meets_minimum_salary(job_data, 80000))
+
+    def test_no_salary_data(self):
+        job_data = {'salary_min': None, 'salary_max': None}
+        self.assertFalse(job_meets_minimum_salary(job_data, 80000))
+
+    def test_non_numeric_salary(self):
+        job_data = {'salary_min': 'Negotiable', 'salary_max': None}
+        self.assertFalse(job_meets_minimum_salary(job_data, 80000))
+
+    def test_exact_minimum(self):
+        job_data = {'salary_min': '80000', 'salary_max': '80000'}
+        self.assertTrue(job_meets_minimum_salary(job_data, 80000))
+
 
 if __name__ == '__main__':
     unittest.main()

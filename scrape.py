@@ -68,6 +68,24 @@ SEARCH_OPTIONS_LIST = [
         "what": "Site Reliability Engineer",
         "output folder": "sre",
     },
+    {
+        "what": "Cyber",
+        "what_exact_match": "cyber",
+        "minimum salary": 80000,
+        "output folder": "cybersec",
+    },
+    {
+        "what": "Security",
+        "what_exact_match": "security",
+        "minimum salary": 80000,
+        "output folder": "cybersec",
+    },
+    {
+        "what": "CISO",
+        "what_exact_match": "ciso",
+        "minimum salary": 80000,
+        "output folder": "cybersec",
+    },
 ]
 BASE_URL = "https://www.civilservicejobs.service.gov.uk"
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -128,6 +146,16 @@ class ScrapingStats:
             logger.error(f"  ERRORS: {errors} ({(errors/total_jobs * 100):.1f}%)")
         logger.info("=====================")
 
+def job_meets_minimum_salary(job_data, minimum_salary):
+    salary_values = []
+    for key in ('salary_min', 'salary_max'):
+        try:
+            salary_values.append(int(job_data[key]))
+        except (ValueError, TypeError, KeyError):
+            pass
+    return bool(salary_values) and max(salary_values) >= minimum_salary
+
+
 def solve_captcha():
     """Solve the ALTCHA captcha and transfer cookies to the requests session."""
     logger.info("Solving ALTCHA captcha...")
@@ -181,6 +209,10 @@ def scrape_jobs(search_options_list, dry_run):
             what_exact_match = search_options.pop("what_exact_match")
         else:
             what_exact_match = None
+        if "minimum salary" in search_options:
+            minimum_salary = search_options.pop("minimum salary")
+        else:
+            minimum_salary = None
         assert not search_options, f"Unprocessed options {search_options}"
         filtered_payload = {k: v for k, v in payload.items() if k not in ['reqsig', 'SID']}
         logger.info(f"Search: {filtered_payload}")
@@ -217,6 +249,10 @@ def scrape_jobs(search_options_list, dry_run):
                         # e.g. "Intelligence Development Officer" job matches "Developer", probably due to stemming
                         # e.g. "User Researcher" job matches "Technical Architect", when the latter is mentioned as a colleague in the job description
                         logger.info(f'Ignoring job "{job_data["title"]}" as it is not an exact match of "{what_exact_match}"')
+                        continue
+
+                    if minimum_salary and not job_meets_minimum_salary(job_data, minimum_salary):
+                        logger.info(f'Ignoring job "{job_data["title"]}" as salary £{job_data.get("salary_max") or job_data.get("salary_min")} is below minimum £{minimum_salary}')
                         continue
 
                     # Check if job already exists in the sheet
